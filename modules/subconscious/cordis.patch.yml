@@ -1,0 +1,10 @@
+# dsh-archive-subconscious 的行模板（随包分发；archive profile 在 dsh\cordis.patch.yml 引用同一行）。
+- insert:
+    - id: archive-subconscious
+      name: dsh-archive-subconscious
+      config:
+        dataPath: C:/DSH-ARCHIVE/dsh/data/subconscious.json
+        enabled: true
+        condenseModel: phi
+        llmModel: deepseek
+        autoApply: false

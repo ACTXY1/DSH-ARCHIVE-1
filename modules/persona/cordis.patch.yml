@@ -1,0 +1,9 @@
+# dsh-archive-persona 的行模板（随包分发；本项目 archive profile 在
+# C:/DSH-ARCHIVE\dsh\cordis.patch.yml 中直接引用同一行）。
+- insert:
+    - id: archive-persona
+      name: dsh-archive-persona
+      config:
+        personaPath: C:/DSH-ARCHIVE/dsh/data/persona.json
+        injectOrder: 500
+        injectEnabled: true

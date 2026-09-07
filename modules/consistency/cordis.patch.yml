@@ -1,0 +1,12 @@
+# dsh-archive-consistency 的行模板（随包分发；archive profile 在 dsh\cordis.patch.yml 引用同一行）。
+- insert:
+    - id: archive-consistency
+      name: dsh-archive-consistency
+      config:
+        trajectoryPath: C:/DSH-ARCHIVE/dsh/data/consistency.json
+        enabled: true
+        windowSize: 100
+        waypointMax: 5
+        lastN: 20
+        scopedSessions:
+          - session-main

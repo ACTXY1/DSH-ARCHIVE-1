@@ -1,0 +1,13 @@
+# dsh-archive-evolution 的行模板（随包分发；archive profile 在 C:/DSH-ARCHIVE\dsh\cordis.patch.yml 引用）。
+- insert:
+    - id: archive-evolution
+      name: dsh-archive-evolution
+      config:
+        ledgerPath: C:/DSH-ARCHIVE/dsh/data/evolution.jsonl
+        skillsDir: C:/DSH-ARCHIVE/dsh/data/skills
+        provider: deepseek-official
+        model: deepseek-v4-flash
+        maxConflict: 0.5
+        autoSuggest: true
+        autoHour: 22
+        autoNotify: true

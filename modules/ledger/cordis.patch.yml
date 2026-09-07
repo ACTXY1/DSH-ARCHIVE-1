@@ -1,0 +1,7 @@
+# dsh-archive-ledger 的行模板（随包分发；archive profile 在 C:/DSH-ARCHIVE\dsh\cordis.patch.yml 引用）。
+# 注意：本模块必须在其它模块之前插入（首行），保证 logger 工厂/fetch 等钩子在其它模块 apply 前生效。
+- insert:
+    - id: archive-ledger
+      name: dsh-archive-ledger
+      config:
+        dataPath: C:/DSH-ARCHIVE/dsh/data/ledger

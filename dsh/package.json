@@ -1,0 +1,31 @@
+{
+  "name": "dsh-profile-archive",
+  "private": true,
+  "dependencies": {
+    "dsh-archive-memory": "file:../modules/memory",
+    "dsh-archive-persona": "file:../modules/persona",
+    "dsh-archive-clock": "file:../modules/clock",
+    "dsh-archive-loop": "file:../modules/loop",
+    "dsh-archive-ledger": "file:../modules/ledger",
+    "dsh-archive-evolution": "file:../modules/evolution",
+    "dsh-archive-notify": "file:../modules/notify",
+    "dsh-archive-schedule": "file:../modules/schedule",
+    "dsh-archive-control": "file:../modules/control",
+    "dsh-archive-consistency": "file:../modules/consistency",
+    "dsh-archive-subconscious": "file:../modules/subconscious",
+    "dsh-archive-web-fetch": "file:../modules/web-fetch",
+    "dsh-archive-web-perf": "file:../modules/web-perf",
+    "@linxin666/dsh-tool-describe-image": "^0.3.4",
+    "@deepseek-ai/dsh-credentials": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-launch-environment": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-settings": "0.1.1-rc.2"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app"
+      ]
+    }
+  }
+}

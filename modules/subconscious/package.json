@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-subconscious",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 潜意识系统（梦境引擎）：睡眠期后台的进化提案灵感引擎（记忆凝缩/异质碰撞/置信度调度/梦境回放）。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

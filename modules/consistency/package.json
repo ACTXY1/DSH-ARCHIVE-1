@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-consistency",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 人格一致性校验器：滑动窗口人格轨迹 + PCA 坐标 + 突变梯度拦截 + 进化航点协同。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

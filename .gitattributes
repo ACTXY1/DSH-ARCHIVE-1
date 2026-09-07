@@ -1,0 +1,8 @@
+# 统一行尾：文本入库为 LF；平台脚本按平台行尾检出（防 CRLF 破坏 .sh / LF 破坏 .cmd）
+* text=auto
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.vbs text eol=crlf

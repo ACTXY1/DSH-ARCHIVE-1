@@ -1,0 +1,14 @@
+{
+  "name": "dsh-archive-web-perf",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 总控 Web 性能优化：/assets 静态资源 gzip 压缩 + immutable 缓存头，Service Worker 缓存 /plugins 客户端模块（刷新秒开）。纯 Host 插件，三端（主包/Windows 分发包/手机分发包）同步生效。",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,7 @@
+# dsh-archive-schedule 的行模板（随包分发；archive profile 在 C:/DSH-ARCHIVE\dsh\cordis.patch.yml 引用）。
+- insert:
+    - id: archive-schedule
+      name: dsh-archive-schedule
+      config:
+        dbPath: C:/DSH-ARCHIVE/dsh/data/tasks.db
+        checkMs: 30000

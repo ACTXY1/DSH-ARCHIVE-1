@@ -1,0 +1,21 @@
+{
+  "name": "dsh-archive-loop",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 自循环思考驱动器：基于虚拟时钟，事件触发+定时兜底（默认5分钟可运行时调整），召回记忆→结合用户状态/人格分析场景→决定行为（主动发言/主动行动统一决策点），后果评估+防护+循环日志留档。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./scene": "./lib/scene.js",
+    "./guards": "./lib/guards.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,30 @@
+{
+  "name": "dsh-archive-control",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 总控界面：基于 DSH webui 的智能体总控面板（总会话/人格/思维循环/记忆/自进化/定时任务/通知）。Host 暴露 RPC，Client 注册设置页。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "license": "MIT"
+}

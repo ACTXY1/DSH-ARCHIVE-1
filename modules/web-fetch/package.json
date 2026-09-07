@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-web-fetch",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 宿主侧 URL 抓取 provider：注册到 ctx.web 的 fetch，供 web_fetch 工具使用（绕开沙箱受限令牌下 schannel TLS 失败的限制）。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

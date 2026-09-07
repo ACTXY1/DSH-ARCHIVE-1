@@ -1,0 +1,21 @@
+{
+  "name": "dsh-archive-evolution",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 自进化系统（4b）：候选生成→隔离评估→安全门→用户授权采纳/拒绝/回滚；进化对象含虚拟人格与 skill；每次进化留档（追加式账本）。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./ledger": "./lib/ledger.js",
+    "./evaluate": "./lib/evaluate.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

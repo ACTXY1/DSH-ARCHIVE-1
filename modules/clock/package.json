@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-clock",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 虚拟时钟：启动按设备时间同步（年月日+24小时制），服务化唯一时间源 + 周期校准 + systemPrompt 注入。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

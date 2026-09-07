@@ -1,0 +1,20 @@
+{
+  "name": "dsh-archive-persona",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 人格系统入口：persona.json 权威存储 + 版本化留档账本 + 服务/工具 + systemPrompt 注入；预留自进化增补与回滚接口。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./persona-store": "./lib/persona-store.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

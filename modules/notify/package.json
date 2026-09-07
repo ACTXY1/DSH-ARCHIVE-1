@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-notify",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 主动消息通道（可插拔）：控制台输出 + 通知流水 notifications.jsonl；自循环主动发言与定时任务消息统一送达。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

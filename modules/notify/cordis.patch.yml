@@ -1,0 +1,8 @@
+# dsh-archive-notify 的行模板（随包分发；archive profile 在 C:/DSH-ARCHIVE\dsh\cordis.patch.yml 引用）。
+- insert:
+    - id: archive-notify
+      name: dsh-archive-notify
+      config:
+        notificationsPath: C:/DSH-ARCHIVE/dsh/data/notifications.jsonl
+        consoleEnabled: true
+        minIntervalMs: 30000

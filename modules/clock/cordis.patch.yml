@@ -1,0 +1,8 @@
+# dsh-archive-clock 的行模板（随包分发；archive profile 在 C:/DSH-ARCHIVE\dsh\cordis.patch.yml 引用）。
+- insert:
+    - id: archive-clock
+      name: dsh-archive-clock
+      config:
+        calibrateMs: 60000
+        injectOrder: 200
+        injectEnabled: true

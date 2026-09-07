@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-schedule",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 定时任务：告诉 AI 几点干什么，AI 记住并到点发消息（notify）或触发工作（循环/agent）。tasks.db 持久，虚拟时钟触发。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}

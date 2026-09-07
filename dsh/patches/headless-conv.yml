@@ -1,0 +1,27 @@
+# 对话面按需叠加补丁：dsh --profile archive --patch 本文件 "<用户消息>"
+# 把 headless 一行式 agent 驱动挂到 archive 组合上（不写入默认组合，保持长驻自循环模式）。
+# 任务文本由启动提供器从命令行参数解析（与 dsh --profile headless 同机制）。
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+- id: hmr
+  disabled: true
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: headless-startup
+      name: '@deepseek-ai/dsh-headless/startup'
+
+    - id: headless-runner
+      name: '@deepseek-ai/dsh-headless'
+      inject: [headlessStartup]
+      config:
+        task: !!js ctx.headlessStartup.task

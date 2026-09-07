@@ -1,0 +1,19 @@
+{
+  "name": "dsh-archive-ledger",
+  "version": "0.1.0",
+  "description": "DSH-ARCHIVE 提示词/报错全量记录（总控底部面板数据源）：logger/console/fetch/ctx.llm/进程级五路采集 + JSONL 持久化 + /archive-ledger RPC。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT"
+}
