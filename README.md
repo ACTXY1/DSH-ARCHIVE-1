@@ -27,10 +27,6 @@ DSH-ARCHIVE 是一个基于 DSH 框架、可长时间自主运行的智能体系
 5. 启动：《启动DSH-ARCHIVE.cmd》，访问 http://127.0.0.1:3081。
 6. 更新：《一键更新.cmd》从本仓库拉取最新版本（匿名只读）；《一键回滚.cmd》回到上一版本。更新不触碰 `dsh\data`（记忆/会话/凭据）与 ollama 模型。停止用《停止DSH-ARCHIVE.cmd》。
 
-### 手机 / 其它 Linux（Termux 等）
-
-在项目根目录执行 `bash install.sh` 完成依赖安装与路径初始化，之后 `bash start.sh` 启动、`bash update.sh` 更新、`bash rollback.sh` 回滚（需先安装 git）。安装脚本会尝试下载或复用 ollama 模型。
-
 ### 说明
 
 - 用户数据目录 `dsh\data` 与 ollama 模型库不进入仓库、不参与一键更新，可安全删除后重装。
