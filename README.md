@@ -20,7 +20,7 @@ DSH-ARCHIVE 是一个基于 DSH 框架、可长时间自主运行的智能体系
 
 ### Windows
 
-1. 前置：Node.js ≥ 22.5、pnpm、dsh CLI（`npm i -g @deepseek-ai/dsh`）。可选安装 [ollama](https://ollama.com)（向量模型 `shaw/dmeta-embedding-zh` 用于记忆与一致性；启动脚本会自动复用本机已运行的 ollama，未安装时记忆检索功能不可用）。
+1. 前置：Node.js ≥ 22.5、pnpm、dsh CLI（`npm i -g @deepseek-ai/dsh`）。向量模型运行时 [ollama](https://ollama.com)：首次安装脚本会自动处理——本机已运行 ollama 则直接复用并补拉嵌入模型；否则自动下载捆绑版（约 1.3GB）并在首次启动时自动拉取嵌入模型 `shaw/dmeta-embedding-zh`（下载失败不影响其余步骤，可按提示稍后手动补齐）。
 2. 下载代码：`git clone https://github.com/ACTXY1/DSH-ARCHIVE-1.git`（或页面 Code → Download ZIP）。
 3. 首次安装：双击根目录《首次安装或移动项目位置点我.cmd》（检测/提示前置环境、安装依赖、同步插件并建立 profile）。
 4. 配置模型密钥：启动后浏览器进入控制台 → 模型页填写 API Key（或配置自定义提供商）；未配置时服务可启动，AI 相关功能会提示缺少凭据。

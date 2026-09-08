@@ -11,6 +11,7 @@
 #          5. dsh-tools junction 与 modules -> node_modules 插件同步
 #          6. 数据目录存在性
 #          7. profile 可加载性验证（dsh --profile archive --dump-config）
+#          8. ollama 向量模型运行时（无本机 ollama 时自动下载，首次启动自动拉取嵌入模型）
 #
 #  用法：双击同目录《首次安装或移动项目位置点我.cmd》；
 #        或 powershell -NoProfile -ExecutionPolicy Bypass -File "fix-project-location.ps1"
@@ -99,7 +100,7 @@ if ($DryRun) { Write-Host '   模式：只检查（-DryRun，不修改）' -Fore
 Write-Host '============================================================'
 
 # ---------------- 0. 校验项目根 ----------------
-Write-Step '0/8 校验项目根'
+Write-Step '0/9 校验项目根'
 $profilePatch = Join-Path $root 'dsh\cordis.patch.yml'
 $profilePkg   = Join-Path $root 'dsh\package.json'
 if (-not (Test-Path $profilePatch) -or -not (Test-Path $profilePkg)) {
@@ -109,7 +110,7 @@ if (-not (Test-Path $profilePatch) -or -not (Test-Path $profilePkg)) {
 Write-Ok '识别为 DSH-ARCHIVE 项目'
 
 # ---------------- 1. 环境检测 ----------------
-Write-Step '1/8 检测当前用户环境'
+Write-Step '1/9 检测当前用户环境'
 $isAdmin = [bool](([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))
 Write-Ok ('操作系统：' + [System.Environment]::OSVersion.VersionString)
 Write-Ok ('PowerShell：' + $PSVersionTable.PSVersion.ToString() + $(if ($isAdmin) { '（管理员权限）' } else { '（普通权限）' }))
@@ -142,7 +143,7 @@ if ($winget) { Write-Ok ("winget：" + (Get-ToolVersion 'winget') + "（Node.js 
 else { Write-Skip 'winget：不可用（Node.js 缺失时将提示手动安装）' }
 
 # ---------------- 2. 前置依赖自动安装 ----------------
-Write-Step '2/8 配置前置与依赖'
+Write-Step '2/9 配置前置与依赖'
 if ($DryRun) {
     $missing = @()
     if ($null -eq $nodeVer) { $missing += 'Node.js' }
@@ -234,7 +235,7 @@ if ($DryRun) {
 }
 
 # ---------------- 3. dsh 命令兜底校验 ----------------
-Write-Step '3/8 校验 dsh 命令'
+Write-Step '3/9 校验 dsh 命令'
 $dshCmd = Get-Command dsh -ErrorAction SilentlyContinue
 if (-not $dshCmd) {
     Write-Err 'dsh 命令仍不可用（前置安装未成功）。'
@@ -243,7 +244,7 @@ if (-not $dshCmd) {
 Write-Ok ('dsh：' + $dshCmd.Source)
 
 # ---------------- 4. profile junction ----------------
-Write-Step '4/8 修复 ~/.dsh/profiles/archive 目录联接'
+Write-Step '4/9 修复 ~/.dsh/profiles/archive 目录联接'
 $junction   = Join-Path $userHome '.dsh\profiles\archive'
 $juncTarget = Join-Path $root 'dsh'
 $wantNorm   = Normalize-Path $juncTarget
@@ -272,7 +273,7 @@ try {
 }
 
 # ---------------- 5. 项目内绝对路径引用重写 ----------------
-Write-Step '5/8 扫描并重写项目内旧绝对路径引用'
+Write-Step '5/9 扫描并重写项目内旧绝对路径引用'
 $textExts = '.yml','.yaml','.ps1','.md','.txt','.json','.js','.cjs','.mjs','.cmd','.bat','.html','.css','.ts','.vbs','.xml','.cfg','.conf','.ini','.properties','.env','.csv'
 $excludeDir = '(\\\.git\\|\\\.pnpm-store\\|\\ollama\\|\\logs\\|\\backups\\|\\node_modules\\)'
 $rootBS = $root.TrimEnd('\')
@@ -324,7 +325,7 @@ if ($changed -eq 0) { Write-Ok "扫描 $scanned 个文本文件，无过时路�
 else { Write-Host ("  [改] 共 {0} 个文件含过时路径引用，已处理（扫描 {1} 个文件）" -f $changed, $scanned) -ForegroundColor Yellow }
 
 # ---------------- 6. 插件依赖与同步 ----------------
-Write-Step '6/8 检查插件依赖并同步'
+Write-Step '6/9 检查插件依赖并同步'
 # 6a) agent preset 随包分发：分发包携带 presets/archive-standard，首次部署时装入本机 ~/.dsh/.agent-presets/
 $presetSrc = Join-Path $root 'presets\archive-standard'
 $presetDst = Join-Path $userHome '.dsh\.agent-presets\archive-standard'
@@ -389,7 +390,7 @@ if ($DryRun) {
 }
 
 # ---------------- 7. 数据目录 ----------------
-Write-Step '7/8 检查数据目录'
+Write-Step '7/9 检查数据目录'
 $dataDir = Join-Path $root 'dsh\data'
 foreach ($sub in @('', 'sessions', 'skills', 'storages')) {
     $p = if ($sub) { Join-Path $dataDir $sub } else { $dataDir }
@@ -401,7 +402,7 @@ foreach ($sub in @('', 'sessions', 'skills', 'storages')) {
 Write-Ok '数据目录就绪（dsh\data 及其子目录）'
 
 # ---------------- 8. 验证 ----------------
-Write-Step '8/8 验证 profile 可加载'
+Write-Step '8/9 验证 profile 可加载'
 if ($DryRun) {
     Write-Skip '（-DryRun 跳过验证）'
 } else {
@@ -412,6 +413,87 @@ if ($DryRun) {
         Write-Err 'profile 验证失败，输出如下：'
         Write-Host ($out.Substring(0, [Math]::Min(1500, $out.Length)))
         Read-Exit; exit 1
+    }
+}
+
+# ---------------- 9. ollama 向量模型运行时（记忆语义检索/人格一致性/潜意识凝缩依赖向量） ----------------
+Write-Step '9/9 ollama 向量模型运行时'
+$ollamaExe = Join-Path $root 'ollama\bin\ollama.exe'
+$dmetaShort = 'dmeta-embedding-zh'
+$dmetaTag = 'shaw/dmeta-embedding-zh:latest'
+
+function Invoke-OllamaApi([string]$apiPath, [int]$timeoutSec = 5) {
+    try { return (Invoke-RestMethod -Uri ('http://127.0.0.1:11434' + $apiPath) -TimeoutSec $timeoutSec) } catch { return $null }
+}
+function Get-OllamaCli {
+    $cmd = Get-Command ollama -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    foreach ($c in @("$env:LOCALAPPDATA\Programs\Ollama\ollama.exe", "$env:ProgramFiles\Ollama\ollama.exe", $ollamaExe)) {
+        if (Test-Path $c) { return $c }
+    }
+    return $null
+}
+
+if (Test-Path $ollamaExe) {
+    Write-Ok '项目内 ollama 已存在（启动脚本自动拉起并确保嵌入模型，无需处理）'
+} elseif ($DryRun) {
+    Write-Skip '（-DryRun 跳过 ollama 检测/下载）'
+} else {
+    $api = Invoke-OllamaApi '/api/tags'
+    if ($null -ne $api) {
+        # a) 本机已有 ollama 服务（11434）→ 复用外部实例，不重复下载；仅确保嵌入模型
+        $hasDmeta = $false
+        if ($api.models) { $hasDmeta = @($api.models | Where-Object { $_.name -like "*$dmetaShort*" }).Count -gt 0 }
+        if ($hasDmeta) {
+            Write-Ok '检测到本机 ollama（11434），嵌入模型 dmeta-embedding-zh 已就绪 —— 直接复用，无需下载'
+        } else {
+            Write-Host '  检测到本机 ollama（11434）但缺少嵌入模型，尝试自动拉取 dmeta-embedding-zh（约 390MB）…' -ForegroundColor DarkYellow
+            $cli = Get-OllamaCli
+            if ($cli) {
+                & $cli pull $dmetaTag 2>&1 | Out-Host
+                if ($LASTEXITCODE -eq 0) { Write-Ok '嵌入模型已拉取' }
+                else { Write-Warn '模型拉取失败，可稍后手动执行：ollama pull shaw/dmeta-embedding-zh' }
+            } else {
+                Write-Warn '未找到 ollama 命令行，请稍后手动执行：ollama pull shaw/dmeta-embedding-zh'
+            }
+        }
+    } else {
+        # b) 无任何 ollama → 下载捆绑版到项目 ollama\（多源；与手机 install.sh 同思路；start.ps1 首次启动自动拉起并拉模型）
+        Write-Host '  未检测到 ollama。将下载 Windows 版 ollama（约 1.3GB，需联网与耐心）；下载失败不影响其它步骤，可稍后手动放置。' -ForegroundColor DarkYellow
+        $zipName = 'ollama-windows-amd64.zip'
+        $zipUrl = @(
+            "https://github.com/ollama/ollama/releases/download/v0.33.3/$zipName",
+            "https://gh-proxy.com/https://github.com/ollama/ollama/releases/download/v0.33.3/$zipName",
+            "https://ollama.com/download/$zipName"
+        )
+        $zipPath = Join-Path $env:TEMP ('ollama-' + [guid]::NewGuid().ToString('N') + '.zip')
+        $downloaded = $false
+        foreach ($u in $zipUrl) {
+            Write-Host ("    下载源：{0}" -f $u)
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $zipPath -TimeoutSec 3600
+                $downloaded = $true
+                break
+            } catch {
+                Write-Warn ('下载失败：' + $_.Exception.Message)
+                Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if ($downloaded) {
+            try {
+                Write-Host '  解压中（ollama-windows-amd64.zip，约需 1-3 分钟）…' -ForegroundColor DarkYellow
+                Expand-Archive -Path $zipPath -DestinationPath (Join-Path $root 'ollama') -Force
+                if (Test-Path $ollamaExe) {
+                    Write-Ok ('ollama 就绪：' + ((& $ollamaExe --version 2>&1 | Select-Object -First 1) -join ''))
+                    Write-Host '  首次启动《启动DSH-ARCHIVE.cmd》时将自动拉取嵌入模型 dmeta-embedding-zh（约 390MB）。' -ForegroundColor DarkYellow
+                } else {
+                    Write-Warn '解压完成但未找到 ollama\bin\ollama.exe（可能被安全软件拦截），请检查后重跑本脚本'
+                }
+            } catch { Write-Warn ('解压失败：' + $_.Exception.Message) }
+            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Warn 'ollama 全部下载源失败（网络受限？）。可稍后在能联网的设备下载 ollama-windows-amd64.zip，解压出的 bin/、lib/ 放入本目录 ollama/ 后重跑本脚本。'
+        }
     }
 }
 
