@@ -109,6 +109,22 @@ if (-not (Test-Path $profilePatch) -or -not (Test-Path $profilePkg)) {
 }
 Write-Ok '识别为 DSH-ARCHIVE 项目'
 
+# --- 服务运行检测：运行中同步插件会因文件占用失败，先提示停止（幂等保护） ---
+$livePorts = @()
+foreach ($probePort in @(3081, 3085)) {
+    try {
+        $probe = New-Object System.Net.Sockets.TcpClient
+        $probeIar = $probe.BeginConnect('127.0.0.1', $probePort, $null, $null)
+        $probeOk = $probeIar.AsyncWaitHandle.WaitOne(800)
+        if ($probeOk) { $probe.EndConnect($probeIar); $livePorts += $probePort }
+        $probe.Close()
+    } catch { }
+}
+if ($livePorts.Count -gt 0) {
+    Write-Warn ("检测到端口 {0} 有服务在监听（可能是运行中的 DSH-ARCHIVE 实例）。为避免运行中文件占用导致插件同步失败，请先双击《停止DSH-ARCHIVE.cmd》停止服务，再运行本脚本。" -f ($livePorts -join '、'))
+    Read-Exit; exit 1
+}
+
 # ---------------- 1. 环境检测 ----------------
 Write-Step '1/9 检测当前用户环境'
 $isAdmin = [bool](([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))
