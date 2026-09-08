@@ -1,4 +1,4 @@
-# DSH-ARCHIVE one-click start script.
+﻿# DSH-ARCHIVE one-click start script.
 # Usage: double-click "Start-DSH-ARCHIVE.cmd", or run this script in PowerShell.
 # Params: -NoSync skip plugin sync; -NoOpen do not auto-open browser.
 param(

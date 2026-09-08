@@ -1,4 +1,4 @@
-# DSH-ARCHIVE stop script: stop the webui listening on the project port.
+﻿# DSH-ARCHIVE stop script: stop the webui listening on the project port.
 # Usage: powershell -File stop.ps1            (default port 3081)
 #        powershell -File stop.ps1 -Port 3081
 # Note: kept pure ASCII (no BOM) so PS 5.1 reads it safely in any codepage.

@@ -1,4 +1,4 @@
-# 确保 @deepseek-ai/dsh-tools 通过 junction 指向 launcher 的同一副本。
+﻿# 确保 @deepseek-ai/dsh-tools 通过 junction 指向 launcher 的同一副本。
 # 原因：插件 import defineTool 与 loader 的 tools 服务必须使用同一个模块实例
 # （TOOL_RUNTIME_SCHEDULER 是 Symbol，两个物理副本 = 两个 Symbol，agent 工具调用会
 # 报 "reading 'prepare' of undefined"）。web profile 不显式依赖 dsh-tools，天然一致；
