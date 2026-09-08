@@ -2623,9 +2623,22 @@ window.__ModuleLoader__.load({
         useEffect(() => { void load(); }, [load]);
 
         const suggest = () => {
+          // 触发建议是约 2 分钟长 RPC：先给进行中提示，设兜底等待上限，结束后无论成败/超时都强制
+          // 刷新候选列表（候选由服务端落账，刷新即可见），避免页面长时间无反馈。
           askConfirm('触发一次自进化建议：AI 依据记忆与人格生成候选（不生效），随后逐条隔离评估。', async () => {
-            const r = await rpc('evolution.suggest', { by: 'webui' });
-            if (r.ok) { showToast(`已生成 ${r.value?.candidateIds?.length ?? 0} 条候选`); void load(); } else showToast(`生成失败：${r.error}`);
+            let hint = null;
+            try {
+              hint = setTimeout(() => showToast('正在生成候选（通常 1–2 分钟），完成后会自动刷新'), 15000);
+              const r = await Promise.race([
+                rpc('evolution.suggest', { by: 'webui' }),
+                new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: '等待服务端超时（候选可能已生成，正在刷新查看）' }), 180000)),
+              ]);
+              if (r.ok) showToast(`已生成 ${r.value?.candidateIds?.length ?? 0} 条候选，已发通知`);
+              else showToast(`生成失败或超时：${r.error ?? '未知错误'}`);
+            } finally {
+              if (hint) clearTimeout(hint);
+              void load();
+            }
           });
         };
         const approve = (c) => {

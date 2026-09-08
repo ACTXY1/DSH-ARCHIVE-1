@@ -460,7 +460,23 @@ export function apply(ctx, rawConfig) {
     // 自进化
     'evolution.view': (a) => ctx.evolution.view(a.limit),
     'evolution.stats': () => ctx.evolution.stats(),
-    'evolution.suggest': (a) => ctx.evolution.suggest({ by: a.by ?? 'user' }),
+    'evolution.suggest': async (a) => {
+      // 手动触发成功且产出候选时发铃铛通知（与每日 22:00 自动候选同款文案/通道）；
+      // 仅 UI 手动路径走本 OPS，agent 工具直调服务层不重复打扰。
+      const res = await ctx.evolution.suggest({ by: a.by ?? 'user' });
+      const n = (res?.candidateIds ?? []).length;
+      if (n > 0 && typeof ctx.notify?.send === 'function') {
+        try {
+          const passed = (res.results ?? []).filter((r) => r.decision?.passed).length;
+          ctx.notify.send({
+            content: `🧬 自进化：手动已生成 ${n} 条进化候选（${passed} 条通过安全评估），请到「自进化」页审阅采纳或拒绝。`,
+            source: 'evolution',
+            scope: 'panel',
+          });
+        } catch { /* 通知失败不阻断生成结果 */ }
+      }
+      return res;
+    },
     // 一致性协同已统一在 evolution 服务层发射（approve/autoApply 全路径覆盖，
     // 含 agent 工具与潜意识自动微调）——此处不再手动调用，避免双触发重复入轨
     'evolution.approve': (a) => ctx.evolution.approve(a.candidateId, { by: 'user', confirm: a.confirm }),
