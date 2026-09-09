@@ -39,8 +39,22 @@ echo '============================================'
 
 # ---------------- 1. 环境检查 ----------------
 need dsh || die '未找到 dsh 命令（请先运行 install.sh）'
-if [ ! -e "$HOME/.dsh/profiles/archive" ]; then
+PROFILE_LINK="$HOME/.dsh/profiles/archive"
+if [ ! -e "$PROFILE_LINK" ]; then
   die 'archive profile 未挂载（请先运行 install.sh）'
+fi
+# 2026-09-05 防御：profile 必须指向【本副本】的 dsh。手机重装/复制到新目录后链接若仍指旧目录，
+# 启动会读到旧(或另一份空白)副本的 dsh/data——对话记录与模型提供商配置会显示"被重置"，
+# 真实数据其实在别的副本里（勿删任何副本）。此处不一致即拒绝启动。
+PROFILE_TARGET="$(readlink -f "$PROFILE_LINK" 2>/dev/null || true)"
+DASH_REAL="$(cd "$DASH_DIR" && pwd)"
+if [ -n "$PROFILE_TARGET" ] && [ "$PROFILE_TARGET" != "$DASH_REAL" ]; then
+  die "archive profile 指向 $PROFILE_TARGET，而非本副本 $DASH_REAL；请在本目录重跑 install.sh 后启动"
+fi
+# 数据根自检：一键更新用 git checkout -f 拉回仓库标准路径 C:/DSH-ARCHIVE，随后必须重跑路径归一化；
+# 若该步被中断/跳过，服务会把数据读写到错误位置。检测 patch 内残留即拒绝启动。
+if grep -qE '^[[:space:]]*(root|path|dbPath|dataPath|dataRoot|personaPath|ledgerPath|skillsDir|notificationsPath|trajectoryPath|dshHome):[[:space:]]*C:/DSH-ARCHIVE' "$DASH_DIR/cordis.patch.yml" 2>/dev/null; then
+  die 'dsh/cordis.patch.yml 仍含仓库标准路径 C:/DSH-ARCHIVE（未归一化）；请重跑 install.sh 或 update.sh'
 fi
 
 # ---------------- 2. 单实例守卫 ----------------

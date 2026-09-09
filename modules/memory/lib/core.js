@@ -51,8 +51,8 @@ export class MemoryCore {
       throw new Error('memory.recall: query 必填且不能为空字符串');
     }
     const q = query.query.trim();
-    // keyword 模式不生成 embedding：keyword 检索是不依赖向量服务的兜底（无条件 embed
-    // 会在 ollama 挂起时 60s 超时挂起，且每次 keyword 召回都浪费一次 embedding）
+    // 2026-08-31 审计修复：keyword 模式不生成 embedding——ollama 挂起时 keyword 检索本应作为
+    // 不依赖向量服务的兜底，此前无条件 embed 会 60s 挂起且每次 keyword 召回都浪费一次 embedding
     const mode = query.mode ?? 'hybrid';
     const embedding = mode === 'keyword' ? undefined : await this.embedder.embed(q);
     if (embedding !== undefined) this._lastDims = embedding.length;
@@ -78,8 +78,8 @@ export class MemoryCore {
     return this.store.get(id);
   }
 
-  /** 更新记忆（重要度/保护/内容/标签等）；content 变化时重新向量化并同步 embedding 列，
-   *  避免语义检索继续使用旧向量（内容与语义错位）。 */
+  /** 更新记忆（重要度/保护/内容/标签等）。
+   * 2026-08-30 审计修复：content 变化时重新向量化并同步 embedding 列（此前语义检索继续用旧向量）。 */
   async update(id, patch) {
     if (typeof id !== 'string' || id === '') throw new Error('memory.update: id 必填');
     const p = patch ?? {};
@@ -161,12 +161,12 @@ export class MemoryCore {
   // ===== 用户当前状态（短期实时） =====
 
   /**
-   * 设置用户当前状态：
+   * 设置用户当前状态（2026-09-03 记忆错乱修复）：
    * 1) 状态名归一：sleeping/asleep/sleep 等英文与口语化名称自动归一为规范中文
-   *    （'睡眠中'），awake/active/online 等归一为 '在线'——避免 loop 只认 '睡眠中'
-   *    而库中却存 'sleeping' 导致"睡眠闸门失效/自相矛盾"；
+   *    （'睡眠中'），awake/active/online 等归一为 '在线'——杜绝 loop 只认 '睡眠中'
+   *    而库中却存 'sleeping' 导致的"睡眠闸门失效/自相矛盾"；
    * 2) 单槽互斥：写入新状态前把其他仍有效状态标记过期（保留历史行），
-   *    同一时刻只保留一个当前状态。
+   *    同一时刻只保留一个当前状态（曾出现 sleeping 与 active 同时有效互相矛盾）。
    * 存储层（store）保持逐行原义（备份导入等历史语义不受影响）。
    */
   stateSet(input) {
@@ -220,7 +220,7 @@ export class MemoryCore {
       if (s.detail) parts.push(escapeXml(s.detail));
       if (s.evidence) parts.push(`证据：${escapeXml(s.evidence)}`);
       const until = s.expiresAt ? ` until="${new Date(s.expiresAt).toLocaleString('zh-CN', { hour12: false })}"` : '';
-      // 注入名用归一化规范名（历史遗留 sleeping/active 行也按规范呈现）
+      // 2026-09-03：注入名用归一化规范名（历史遗留 sleeping/active 行也按规范呈现）
       lines.push(`<user-state name="${escapeXml(canonicalState(s.state))}" confidence="${s.confidence.toFixed(2)}"${until}>${parts.join('；')}</user-state>`);
     }
     for (const p of profile) {
@@ -279,7 +279,7 @@ export class MemoryCore {
   }
 }
 
-/** XML 转义（防止内容破坏注入块结构；双引号必须转义——状态名/详情会拼进 name="…" 属性）。 */
+/** XML 转义（防止内容破坏注入块结构；2026-08-30 审计修复：补双引号转义——状态名/详情会拼进 name="…" 属性）。 */
 function escapeXml(text) {
   return String(text)
     .replace(/&/g, '&amp;')
@@ -289,9 +289,9 @@ function escapeXml(text) {
 }
 
 /**
- * 用户状态名归一：英文/口语化状态名 → 规范中文。
- * 约束：user_state_set 由 LLM 自由命名，可能写入 sleeping/active 等英文名，
- * 而 loop 睡眠闸门只精确匹配 '睡眠中'——故工具层必须统一归一，避免状态自相矛盾。
+ * 用户状态名归一（2026-09-03 记忆错乱修复）：英文/口语化状态名 → 规范中文。
+ * 根源：user_state_set 由 LLM 自由命名，曾写入 sleeping/active 等英文名，
+ * 而 loop 睡眠闸门只精确匹配 '睡眠中' → 睡眠期间照常发主动消息、状态自相矛盾。
  * 注意：core 与 loop 各持一份同义映射（loop 不能反向依赖 memory 包），改动须同步。
  * @param {unknown} raw
  * @returns {string} 归一后的状态名；空输入返回 ''

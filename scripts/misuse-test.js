@@ -1,6 +1,6 @@
 // 系统级误用探测：重复采纳、循环并发触发互斥、符号查询
-// evolution 用临时目录（不写真实 data/evolution-torture.jsonl + data/skills——
-// 避免重复运行时"内容去重"残留互相影响，且污染项目数据）。
+// 2026-09-01：evolution 改用临时目录（此前写真实 data/evolution-torture.jsonl + data/skills——
+// 重复运行会因"内容去重"残留互相影响，且污染项目数据）。
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -48,7 +48,7 @@ let llmCalls = 0;
 const loopCtx = {
   root: { logger: () => ({ info: () => {}, warn: () => {} }) },
   provide: () => {}, on: () => {}, emit: () => {},
-  // loop 用 ctx.inject(['settings']) 注册降频开关命名空间——stub 必须提供 inject
+  // 2026-09-01：loop 2026-08-31 起用 ctx.inject(['settings']) 注册降频开关命名空间——stub 必须提供 inject
   inject: (services, cb) => cb({ settings: { register: () => ({}), get: () => ({}), update: async () => {} } }),
   get: (n) => n === 'tools' ? { register: () => {} } : undefined,
   systemPrompt: { context: () => {} },

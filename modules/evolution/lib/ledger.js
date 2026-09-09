@@ -41,8 +41,9 @@ export class EvolutionLedger {
   }
 
   /** 按候选 id 取相关记录（suggest 起；后续事件以 candidateId 关联）。
-   * 全量解析后先按 id 过滤再截取最新 limit 条，避免账本超窗后旧候选记录
-   * 被截掉导致 approve/reject/rollback 找不到候选。 */
+   * 审计修复（2026-08-30）：此前先 all(limit) 截窗再 filter → 账本超窗后旧候选
+   * 记录落在窗口外，approve/reject/rollback 报"候选不存在"；改为全量解析后先按 id
+   * 过滤再截取最新 limit 条。 */
   candidate(id, limit = 100) {
     if (!existsSync(this.path)) return [];
     return this.all().filter((r) => r.candidate?.id === id || r.candidateId === id || r.id === id).slice(0, limit);

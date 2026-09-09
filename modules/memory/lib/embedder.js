@@ -1,5 +1,5 @@
 /**
- * ollama embedding 客户端（基于 ollama 的向量数据库之"向量生成层"）。
+ * ollama embedding 客户端（阶段二：基于 ollama 的向量数据库之"向量生成层"）。
  * 使用 Node 内置 fetch，无第三方依赖。默认模型 shaw/dmeta-embedding-zh（768 维）。
  */
 

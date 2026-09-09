@@ -76,7 +76,7 @@ try {
   check('特殊字符被转义', escRender.includes('&lt;代码&gt;') && escRender.includes('&amp;') && !escRender.includes('<代码>'));
   check('转义后块仍闭合', escRender.endsWith('</persona>'));
 
-  console.log('== 整体重建 replace（一键凝练写入）==');
+  console.log('== 整体重建 replace（2026-09-08 一键凝练写入）==');
   // 独立小库验证：set 2 条（不同分区）→ replace 为 1 条合并条目（带 mergedFrom 溯源）→ 版本只 +1、
   // 空分区保留、账本含旧快照、回滚回到 replace 前
   const dirR = join(dir, 'r');

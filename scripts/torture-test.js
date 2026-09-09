@@ -107,7 +107,7 @@ try {
   mustThrow('缺 task 拒绝', () => sched.create({}));
   mustThrow('interval 缺分钟数拒绝', () => sched.create({ task: 'x', schedule: 'interval' }));
   mustThrow('interval 分钟数 0 拒绝', () => sched.create({ task: 'x', schedule: 'interval', intervalMinutes: 0 }));
-  // schedule 枚举须显式传入：非法/缺失不再静默回退 one-time，直接抛"非法 schedule"
+  // 2026-08-31 审计修复：schedule 枚举未显式传时不再静默回退 one-time，直接抛"非法 schedule"
   mustThrow('非法 schedule 枚举拒绝', () => sched.create({ task: 'x', schedule: 'bogus' }));
   mustThrow('无 schedule 拒绝（不再静默回退 one-time）', () => sched.create({ task: 'x' }));
   const past = sched.create({ task: '过去时间', schedule: 'one-time', at: Date.now() - 1000 });
@@ -124,7 +124,7 @@ try {
     root: { logger: () => ({ info: () => {}, warn: () => {} }) },
     provide: () => {}, on: () => {}, emit: () => {},
     get: (n) => n === 'tools' ? { register: () => {} } : undefined,
-    // notify 插件含 6h 清理定时器（ctx.timer.setInterval），stub 必须提供 timer
+    // 2026-08-30 修复：notify 插件新增 6h 清理定时器（ctx.timer.setInterval），stub 必须提供 timer
     timer: { setInterval: () => 1, setTimeout: () => 1 },
   };
   const notify = notifyMod.apply(notifyCtx, { notificationsPath: join(dir, 'n.jsonl'), consoleEnabled: false, minIntervalMs: 1000 });

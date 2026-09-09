@@ -8,7 +8,7 @@
  *
  * 设计要点：
  *  - persona.json 唯一权威；persona-history.jsonl 追加式留档（每次变更含完整快照），
- *    自进化的"留档 + 回滚"直接复用（rollback(version, by)）。
+ *    阶段四自进化的"留档 + 回滚"直接复用（rollback(version, by)）。
  *  - 溯源：条目带 addedBy/addedAt/modifiedBy/modifiedAt；update 可传 by='evolution'。
  *  - 与记忆系统无双写（人格经提示词注入常驻可见，不回写记忆库，保持单一权威）。
  *
@@ -69,7 +69,7 @@ export function apply(ctx, rawConfig) {
     get: () => store.get(),
     view: () => ({ version: store.stats().version, rendered: store.render() }),
     set: (entries, opts) => store.set(entries, opts),
-    // 一键凝练：整体重建（替换全部分区），一次版本+1 并留档（可回滚）
+    // 2026-09-08 一键凝练：整体重建（替换全部分区），一次版本+1 并留档（可回滚）
     replace: (entries, opts) => store.replace(entries, opts),
     update: (id, patch) => store.update(id, patch),
     remove: (id, opts) => ({ removed: store.remove(id, opts) }),
@@ -146,13 +146,13 @@ export function apply(ctx, rawConfig) {
     }));
     reg(defineTool({
       name: 'persona_update',
-      description: '增补/修正一条已存在的人格条目（按 id）。修改会记录修改者与时间并留档；自进化系统将以 evolution 身份调用。',
+      description: '增补/修正一条已存在的人格条目（按 id）。修改会记录修改者与时间并留档；阶段四自进化系统将以 evolution 身份调用。',
       parameters: {
         id: { type: 'string', required: true, description: '条目 id（persona_view 中可见，或用 persona 服务 history 查询）' },
         content: { type: 'string', description: '新内容（省略则不修改）' },
         importance: { type: 'number', description: '重要度 0..1' },
         confidence: { type: 'number', description: '置信度 0..1' },
-        by: { type: 'string', description: '修改者标识（默认 user；自进化用 evolution）' },
+        by: { type: 'string', description: '修改者标识（默认 user；阶段四自进化用 evolution）' },
       },
       output: toolOutput({
         type: 'object', additionalProperties: false,

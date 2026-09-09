@@ -242,7 +242,7 @@ export function apply(ctx, rawConfig) {
   ctx.provide('archiveLedger', api);
 
   /* ================= 路径 1：logger 工厂包裹（Proxy 版） ================= */
-  // 关键约束：Cordis 的 ctx.logger 是"可调用 LoggerService"，其
+  // 关键约束（2026-09-03 实机崩溃修复）：Cordis 的 ctx.logger 是"可调用 LoggerService"，其
   // error/warn/info/debug 挂在原型上且内部通过 this() 委托；若用普通函数整体替换 ctx.root.logger，
   // 会丢失这些原型方法 → 核心（如 cordis-plugin-loader 的 this.ctx.logger.error）直接
   // "is not a function" → 宿主崩溃。因此这里用 Proxy 只拦"以函数方式调用"（=建具名 logger），
@@ -339,7 +339,7 @@ export function apply(ctx, rawConfig) {
         const record = (status, err) => {
           try {
             const parts = promptParts(meta.body.messages, meta.body.prompt);
-            // 官方 ctx.llm 的内部 HTTP fetch 由调用方模块的 for-await 驱动，
+            // 2026-09-03-10 去重修复：官方 ctx.llm 的内部 HTTP fetch 由调用方模块的 for-await 驱动，
             // 栈归源会命中模块（非 core）→ 与 llm 包裹先记的 sent 记录重复（面板同一提示词出现两行）。
             // 处理：2s 内存在 同 module + 同 user/system 前缀 的 sent 记录 → 原位更新其状态（不新增）；
             // 面板读内存环 → 一调用一条且状态正确（ok/http-*/error）；文件仅归档（sent 行保留）。

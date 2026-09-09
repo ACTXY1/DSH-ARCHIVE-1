@@ -7,7 +7,7 @@
 #          1. 环境检测：OS / PowerShell / 网络 / Node.js / npm / pnpm / dsh CLI
 #          2. 前置自动安装：Node.js（winget）、pnpm、dsh CLI、dsh 家目录初始化
 #          3. ~/.dsh/profiles/archive 目录联接（junction）指向
-#          4. 项目内所有绝对路径引用（cordis.patch.yml、README、脚本等）
+#          4. 项目内旧绝对路径引用重写（仅功能文件：cordis.patch.yml/脚本/配置；跳过 .md/.txt 文档与 URL，防误写）
 #          5. dsh-tools junction 与 modules -> node_modules 插件同步
 #          6. 数据目录存在性
 #          7. profile 可加载性验证（dsh --profile archive --dump-config）
@@ -47,6 +47,24 @@ function Get-JunctionTarget($path) {
     $item = Get-Item $path -Force -ErrorAction SilentlyContinue
     if (-not $item -or $item.LinkType -ne 'Junction') { return $null }
     return Normalize-Path (($item.Target -join ''))
+}
+# 2026-09-05：判断某副本 dsh\data 是否已含用户数据（会话/设置/凭据/记忆等任一非空即视为有数据）。
+# 用于 junction 改指前的防呆保护：防止把全局 junction 从"有数据的副本"改指到"空白新副本"，
+# 那正是"重进后对话记录与模型提供商配置被重置"的根源之一（数据其实还在原副本，只是不再被读到）。
+function Test-DataPresent([string]$dshDir) {
+    $d = Join-Path $dshDir 'data'
+    if (-not (Test-Path $d)) { return $false }
+    $sess = Join-Path $d 'sessions'
+    if ((Test-Path $sess) -and @(Get-ChildItem $sess -Recurse -File -Force -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
+    foreach ($name in @('settings.yaml', 'credentials.yaml', 'memory.db', 'tasks.db', 'persona.json', 'persona-history.jsonl', 'notifications.jsonl', 'evolution.jsonl', 'consistency.json', 'subconscious.json', 'ledger', 'storages')) {
+        $p = Join-Path $d $name
+        if (-not (Test-Path $p)) { continue }
+        $it = Get-Item $p -Force
+        if ($it.PSIsContainer) {
+            if (@(Get-ChildItem $p -Recurse -File -Force -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
+        } elseif ($it.Length -gt 0) { return $true }
+    }
+    return $false
 }
 # 安全重建 junction（先删旧链接，不触碰目标内容）
 function Set-Junction($link, $target) {
@@ -265,21 +283,83 @@ $junction   = Join-Path $userHome '.dsh\profiles\archive'
 $juncTarget = Join-Path $root 'dsh'
 $wantNorm   = Normalize-Path $juncTarget
 
+# 2026-09-05 场景化决策（目标：任何情况（含闲点/重复运行）都无害、幂等、结果可预期）：
+#   - junction 已正确指向本目录        → 无操作（闲点无害）
+#   - junction 缺失，本目录有数据       → 整体移动/换机后首次修复：创建
+#   - junction 缺失，本目录空白但同层存在含数据的 DSH-ARCHIVE 副本 → 拒绝（避免把入口偷指到空白副本）
+#   - junction 缺失，纯新装             → 创建
+#   - 现指向的旧目录已不存在            → 整体移动：自动改指本目录
+#   - 现指向的旧目录存在但为空白        → 旧副本已废弃：自动改指本目录（无数据可丢）
+#   - 现指向的旧目录有数据、本目录空白  → 危险（会把有数据的旧副本闲置化，界面表现为"数据被重置"）：拒绝并指引
+#   - 两份目录都有数据                  → 复制/歧义：交互确认后才改指；-NoPrompt（一键更新）一律拒绝
+function Find-DataSibling([string]$projectRoot) {
+    $parent = Split-Path $projectRoot -Parent
+    if (-not $parent -or -not (Test-Path $parent)) { return @() }
+    return @(Get-ChildItem $parent -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like '*DSH-ARCHIVE*' -and $_.FullName.TrimEnd('\') -ne $projectRoot.TrimEnd('\') } |
+        Where-Object { Test-DataPresent (Join-Path $_.FullName 'dsh') } |
+        ForEach-Object { $_.FullName })
+}
 try {
     if (-not (Test-Path $junction)) {
+        $curHasData = Test-DataPresent $juncTarget
+        if (-not $curHasData) {
+            $siblings = Find-DataSibling $root
+            if ($siblings.Count -gt 0) {
+                Write-Err 'junction 缺失，且本目录 dsh\data 为空，但发现同层存在含用户数据的 DSH-ARCHIVE 副本：'
+                $siblings | ForEach-Object { Write-Err ('    ' + $_) }
+                Write-Err '若在此创建 junction 指向本目录，启动将读到空数据（原数据在以上副本里，未丢失）。'
+                Write-Err '请到含你数据的副本目录运行本脚本；若本目录确为新装，请先确认旧副本不再需要。'
+                Read-Exit; exit 1
+            }
+        }
         if ($DryRun) { Write-Fix "将创建联接：$junction -> $juncTarget" }
         else { Set-Junction $junction $juncTarget; Write-Ok "已创建联接：$junction -> $juncTarget" }
     } else {
         $item = Get-Item $junction -Force
         if ($item.LinkType -ne 'Junction') {
-            Write-Err "「$junction」存在但不是 junction（真实目录），请手动处理后重试。"
+            Write-Err "「$junction」存在但不是 junction（真实目录），为避免误删请手动处理后重试。"
             Read-Exit; exit 1
         }
         if ((Get-JunctionTarget $junction) -eq $wantNorm) {
-            Write-Ok '联接已指向正确位置'
+            Write-Ok '联接已指向正确位置（无需修改）'
         } else {
-            if ($DryRun) { Write-Fix "将重建联接：$junction 现指向 $($item.Target)，应指向 $juncTarget" }
-            else { Set-Junction $junction $juncTarget; Write-Ok "已重建联接：$junction -> $juncTarget" }
+            $oldTargetReal = (($item.Target -join '') -replace '/', '\')
+            $oldAlive = Test-Path $oldTargetReal
+            $oldHasData = if ($oldAlive) { Test-DataPresent $oldTargetReal } else { $false }
+            $newHasData = Test-DataPresent $juncTarget
+            $allowRepoint = $false
+            if (-not $oldAlive) {
+                Write-Warn ("现指向的旧目录已不存在：{0}（判定为整体移动，将自动改指本目录）" -f $oldTargetReal)
+                $allowRepoint = $true
+            } elseif (-not $oldHasData) {
+                Write-Warn ("现指向的旧目录为空白副本：{0}（判定为已废弃，将自动改指本目录）" -f $oldTargetReal)
+                $allowRepoint = $true
+            } elseif (-not $newHasData) {
+                Write-Err '检测到 junction 现指向的副本 dsh\data 含用户数据，而本目录 dsh\data 为空！'
+                Write-Err ("  现指向副本：{0}" -f $oldTargetReal)
+                Write-Err ("  本目录副本：{0}" -f $juncTarget)
+                Write-Err '若把 junction 改指本目录，启动将读到空数据——对话记录与模型提供商配置会显示"被重置"（数据仍在原副本，未丢失）。'
+                Write-Err '处理方式：如本目录是误建/重领的第二个空白副本，请删除本副本后，到含数据的副本目录运行本脚本；'
+                Write-Err '如确为整体迁移且数据已随目录移动（本目录 dsh\data 应为非空），请核对目录后重试。'
+                Read-Exit; exit 1
+            } else {
+                Write-Warn '检测到两份副本的 dsh\data 都含用户数据（可能是复制/备份后想切换到本目录）。'
+                Write-Warn ("  现指向副本：{0}" -f $oldTargetReal)
+                Write-Warn ("  本目录副本：{0}" -f $juncTarget)
+                if ($NoPrompt) {
+                    Write-Err '自动模式（-NoPrompt）下无法确认使用哪一份，已中止；请到实际要用的副本目录交互运行本脚本。'
+                    Read-Exit; exit 1
+                }
+                Write-Host '  改指后本机启动入口将读取本目录的数据；旧副本目录中的数据文件不会被删除，只是不再被读取。' -ForegroundColor DarkYellow
+                $ans = Read-Host '  确认将本机入口指向本目录？(Y 继续 / N 取消)'
+                $allowRepoint = ($ans -match '^[Yy]')
+                if (-not $allowRepoint) { Write-Skip '已取消，junction 未修改。'; Read-Exit; exit 1 }
+            }
+            if ($allowRepoint) {
+                if ($DryRun) { Write-Fix "将重建联接：$junction 现指向 $($item.Target)，应指向 $juncTarget" }
+                else { Set-Junction $junction $juncTarget; Write-Ok "已重建联接：$junction -> $juncTarget" }
+            }
         }
     }
 } catch {
@@ -290,7 +370,13 @@ try {
 
 # ---------------- 5. 项目内绝对路径引用重写 ----------------
 Write-Step '5/9 扫描并重写项目内旧绝对路径引用'
-$textExts = '.yml','.yaml','.ps1','.md','.txt','.json','.js','.cjs','.mjs','.cmd','.bat','.html','.css','.ts','.vbs','.xml','.cfg','.conf','.ini','.properties','.env','.csv'
+# 2026-09-05 收敛范围：只处理影响运行的配置文件/脚本/代码（cordis.patch.yml、presets、.ps1/.js/
+# package.json/.cmd 等），【跳过 .md/.txt 等文档】——避免把 README/说明里的 https clone 链接或
+# 示例路径误改（曾出现 README 的 httpC:/DSH-ARCHIVE-1.git 被改坏成 httpD:/cs/…）。
+$textExts = '.yml','.yaml','.ps1','.json','.js','.cjs','.mjs','.cmd','.bat'
+# 常量语义文件不参与改写：sync-packages.ps1 / push-seed.ps1 中的 C:/DSH-ARCHIVE 是"归一化目标常量"
+# 而非失效指针（主项目与打包流程依赖它），改写会破坏打包归一化。
+$skipNames = @('sync-packages.ps1', 'push-seed.ps1')
 $excludeDir = '(\\\.git\\|\\\.pnpm-store\\|\\ollama\\|\\logs\\|\\backups\\|\\node_modules\\)'
 $rootBS = $root.TrimEnd('\')
 $rootFS = ($root.TrimEnd('\') -replace '\\', '/')
@@ -298,10 +384,12 @@ $rootNorm = Normalize-Path $root
 # 匹配「盘符: 分隔符 任意路径段 DSH-ARCHIVE」（贪婪到行内最后一个 DSH-ARCHIVE），
 # 用于定位项目曾经所在位置的绝对路径；路径段排除 引号/冒号/换行/尖括号/竖线/反引号
 # （排除冒号可让一行里并列的多个盘符路径各自独立匹配，避免贪婪吞并）。
-$pathPattern = '([A-Za-z]):([\\/])([^":''\r\n<>|`]*)DSH-ARCHIVE'
+# (?<![A-Za-z0-9]) 负向后顾：杜绝命中 URL 里的 "s:"/"t:"（如 httpC:/DSH-ARCHIVE...），
+# 只匹配真正的盘符路径（C:、D: 等，前置字符为空格/引号/等号/冒号/行首等）。
+$pathPattern = '(?<![A-Za-z0-9])([A-Za-z]):([\\/])([^":''\r\n<>|`]*)DSH-ARCHIVE'
 
 $files = @(Get-ChildItem $root -Recurse -File -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -notmatch $excludeDir -and $textExts -contains $_.Extension.ToLowerInvariant() })
+    Where-Object { $_.FullName -notmatch $excludeDir -and $textExts -contains $_.Extension.ToLowerInvariant() -and $skipNames -notcontains $_.Name })
 
 $scanned = 0; $changed = 0
 # JSON 文件里的路径以转义形式存储（盘符:\目录\...\DSH-ARCHIVE 形式）；用私有区字符保护成对反斜杠，

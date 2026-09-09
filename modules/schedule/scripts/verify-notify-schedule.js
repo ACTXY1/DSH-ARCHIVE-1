@@ -53,7 +53,7 @@ check('未读统计', notifyApi.stats().unread === 2);
 check('标记已读', notifyApi.markRead()?.marked === 2 && notifyApi.stats().unread === 0);
 check('控制台输出', notifyOut.includes('[archive-notify]'));
 
-// 按来源组限频：loop 与 schedule 互不挤兑；同组内仍限频
+// 按来源组限频（2026-08-30）：loop 与 schedule 互不挤兑；同组内仍限频
 const notifyG = notifyMod.apply({ ...notifyCtx, timer: { setInterval: () => 1 } }, { notificationsPath: notifyPath + '.g', consoleEnabled: false, minIntervalMs: 60000 });
 const g1 = notifyG.send({ content: 'loop 发言', source: 'loop' });
 const g2 = notifyG.send({ content: 'schedule 提醒', source: 'schedule' });
@@ -61,7 +61,7 @@ const g3 = notifyG.send({ content: 'loop 再发言', source: 'loop' });
 check('不同来源组互不挤兑', g1.sent === true && g2.sent === true);
 check('同组 30s 内限频', g3.limited === true);
 
-// 清理：未超期已读不清；保留期 0 的实例启动即清已读、未读永不清理
+// 清理（2026-08-30）：未超期已读不清；保留期 0 的实例启动即清已读、未读永不清理
 notifyApi.send({ content: '未读保留条', source: 'verify' });
 check('保留期默认不清未超期已读', notifyApi.cleanup().removed === 0 && notifyApi.stats().total === 3);
 const notifyApi0 = notifyMod.apply({ ...notifyCtx, timer: { setInterval: () => 1 } }, { notificationsPath: notifyPath, consoleEnabled: false, minIntervalMs: 0, cleanupRetentionDays: 0 });
@@ -101,7 +101,7 @@ for (const fn of timers.intervals) fn();
 check('到期 work 任务生成待办记忆', writes.some((w) => w.source === 'task-due'));
 check('work 触发自循环', triggers.includes('task-due'));
 
-// 验证：提醒被 notify 限频时任务保持 pending 并推迟重试（不假 fired）
+// 2026-08-30 修复验证：提醒被 notify 限频时任务保持 pending 并推迟重试（不假 fired）
 const t5 = schedApi.create({ task: '限频重试验证', type: 'message', schedule: 'one-time', at: Date.now() + 100 });
 const dueBefore = t5.dueAt;
 await new Promise((resolve) => setTimeout(resolve, 300));
@@ -122,7 +122,7 @@ check('重试期间未重复发送（单次送达）', schedApi.list().filter((t
 const schedApi2 = schedMod.apply({ ...schedCtx }, { dbPath: tasksDb, checkMs: 1000 });
 check('tasks.db 跨重启持久', schedApi2.list().length === 5);
 
-// 清理：默认保留期不清未超期任务；保留期 0 启动即清 fired/cancelled，pending 永不清理
+// 清理（2026-08-30）：默认保留期不清未超期任务；保留期 0 启动即清 fired/cancelled，pending 永不清理
 check('保留期默认不清未超期任务', schedApi2.cleanup().removed === 0 && schedApi2.list().length === 5);
 const schedApi0 = schedMod.apply({ ...schedCtx }, { dbPath: tasksDb, checkMs: 1000, cleanupRetentionDays: 0 });
 const afterClean = schedApi0.list();

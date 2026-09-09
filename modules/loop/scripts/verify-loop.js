@@ -14,13 +14,13 @@ process.stdout.write = (chunk) => { stdout += String(chunk); return true; };
 // 假 LLM：返回固定决策 JSON（含内部动作与外部动作）；EMPTY_NEXT=true 时模拟一次空返回（finish completed 无文本）
 let DECISION_TEXT = '{"analysis":"用户睡眠中，不宜打扰","shouldSpeak":false,"shouldAct":true,"actions":[{"name":"user_state_set","args":{"state":"睡眠中","evidence":"循环决策"},"reason":"确认状态"},{"name":"web_search","args":{"queries":["天气"]},"reason":"需要外部信息"}],"consequenceAssessment":"内部动作安全；外部动作待用户确认","notifyUser":true}';
 let EMPTY_NEXT = false;
-let SLOW_LLM = false; // 慢 LLM，让循环停留在 thinking（测试用户消息中止）
-let LLM_THROW = ''; // 非空时 LLM 流首帧即抛该错误（模拟 MISSING_CREDENTIAL 等）
-let lastBrief = ''; // 捕获传给 LLM 的场景简报（断言含 recent-user-messages 证据块）
-let lastSystem = ''; // 捕获决策协议（断言含用户状态感知步骤）
-let lastDecisionBrief = ''; // 捕获"决策"调用的简报（审查调用会覆盖 lastBrief，故单独留存）
-let lastReviewUser = ''; // 捕获"输出审查员"调用的材料（断言含用户指令）
-// 双 Agent 测试支撑——调用分类、记忆概括固定输出、审查响应可编程
+let SLOW_LLM = false; // 2026-09-01：慢 LLM，让循环停留在 thinking（测试用户消息中止）
+let LLM_THROW = ''; // 2026-09-03：非空时 LLM 流首帧即抛该错误（模拟 MISSING_CREDENTIAL 等）
+let lastBrief = ''; // 2026-09-01：捕获传给 LLM 的场景简报（断言含 recent-user-messages 证据块）
+let lastSystem = ''; // 2026-09-01：捕获决策协议（断言含用户状态感知步骤）
+let lastDecisionBrief = ''; // 2026-09-04-2：捕获"决策"调用的简报（审查调用会覆盖 lastBrief，故单独留存）
+let lastReviewUser = ''; // 2026-09-04-2：捕获"输出审查员"调用的材料（断言含用户指令）
+// 2026-09-03-9：双 Agent 测试支撑——调用分类、记忆概括固定输出、审查响应可编程
 let streamTags = []; // 每次 LLM 调用按 system 归类（decision/memory-analyzer/reviewer）
 const SUM_XML = '<memory-summary source="recent"><flow>最近：用户熬夜点外卖</flow><situation>当前：用户在选餐</situation><mood>用户有点纠结（推断）</mood></memory-summary>\n<memory-summary source="semantic"><key>用户偏好日常干饭、不列选项</key></memory-summary>';
 let REVIEW_RESP = '{"verdict":"ok","correctedSpeak":"","blockedActions":[],"reason":""}';
@@ -31,7 +31,7 @@ async function* fakeStream(opts) {
   if (sys.includes('记忆分析师')) streamTags.push('memory-analyzer');
   else if (sys.includes('输出审查员')) streamTags.push('reviewer');
   else streamTags.push('decision');
-  // 按调用类别留存简报/审查材料（决策调用可能随后被审查调用覆盖 lastBrief）
+  // 2026-09-04-2：按调用类别留存简报/审查材料（决策调用可能随后被审查调用覆盖 lastBrief）
   const userText = String(opts?.messages?.[0]?.content?.[0]?.text ?? '');
   if (sys.includes('记忆分析师')) { /* 概括材料不用于指令断言 */ }
   else if (sys.includes('输出审查员')) lastReviewUser = userText;
@@ -52,7 +52,7 @@ async function* fakeStream(opts) {
     yield { type: 'finish', reason: { kind: 'completed' } };
     return;
   }
-  if (SLOW_LLM) await new Promise((r) => setTimeout(r, 500)); // 模拟 LLM 挂起
+  if (SLOW_LLM) await new Promise((r) => setTimeout(r, 500)); // 2026-09-01：模拟 LLM 挂起
   if (opts?.signal?.aborted) throw new Error('ABORTED: 用户消息打断');
   for (const piece of [DECISION_TEXT.slice(0, 40), DECISION_TEXT.slice(40)]) {
     yield { type: 'text-delta', index: 0, text: piece };
@@ -61,15 +61,15 @@ async function* fakeStream(opts) {
 }
 
 const memoryApi = {
-  // 模拟真实分布：循环决策记忆（loop/manual）每 5 分钟写 2 条，
+  // 2026-09-01 实机修复回归：模拟真实分布——循环决策记忆（loop/manual）每 5 分钟写 2 条，
   // 会把用户消息挤出前 20 条；窗口须扩大到 200 才能在数小时后仍找到对话记忆。
   list: () => [
     ...Array.from({ length: 30 }, (_, i) => ({ content: `循环记忆${i}` })),
-    // 带真实 createdAt，供 <recent-user-messages> 时间戳断言
+    // 2026-09-03-2：带真实 createdAt，供 <recent-user-messages> 时间戳断言
     { content: '用户：我有点困了，先睡一会儿', source: 'conversation', createdAt: Date.now() - 30000 },
   ],
   recall: async () => ({ results: [{ content: '相关记忆A' }, { content: '相关记忆B' }] }),
-  // 与真实 memory 服务一致：用户状态在 state 命名空间
+  // 与真实 memory 服务一致：用户状态在 state 命名空间（2026-08-30 修复 stub 与真实接口不一致的盲区）
   state: {
     snapshot: () => ({ rendered: '<user-context>\n<user-state name="睡眠中">…</user-state>\n</user-context>' }),
     get: () => [{ state: '睡眠中', detail: '用户去睡觉了', evidence: '用户说：我去睡觉了' }],
@@ -77,28 +77,29 @@ const memoryApi = {
     clear: (state) => ({ removed: true }),
   },
   write: async (input) => { captured.writes.push(input); return { id: 'x' }; },
-  forget: (id) => ({ removed: true }), // 被中止循环清理记录用
+  forget: (id) => ({ removed: true }), // 2026-09-01：被中止循环清理记录用
 };
 
 const ctx = {
   root: { logger: () => ({ info: () => {}, warn: () => {} }) },
   provide: () => {},
-  // loop 经 ctx.inject(['settings']) 注册 archive-loop 命名空间并回填降频开关；
+  // 2026-08-31 stub 同步：loop 现经 ctx.inject(['settings']) 注册 archive-loop 命名空间并回填降频开关
   // （settings 在 verify 中不可用 → 回调不执行，降频用默认值；注册动作被吞掉即可）
   inject: () => {},
   on: (name, fn) => { captured.handlers = { ...(captured.handlers ?? {}), [name]: fn }; },
   emit: (name, payload) => captured.emits.push({ name, payload }),
   get: (name) => {
     if (name === 'tools') return { register: (t) => captured.tools.push(t.name) };
-    // loop 主动告知经 ctx.get('notify') 可选访问（真实代码用 ctx.get 而非 ctx.notify 属性）
+    // 2026-08-31 stub 同步：loop 主动告知经 ctx.get('notify') 可选访问（2026-08-30-18 修复后
+    // 真实代码用 ctx.get 而非 ctx.notify 属性——旧 stub 只挂属性 → 告知分支恒不执行 → 断言失败）
     if (name === 'notify') return { send: (input) => { captured.notifySends.push(input); return { sent: true }; } };
-    // 睡眠期：读 schedule 判"有工作任务"（list 动态返回 captured.scheduleTasks）
+    // 2026-08-31 睡眠期：读 schedule 判"有工作任务"（list 动态返回 captured.scheduleTasks）
     if (name === 'schedule') return { create: (input) => ({ id: 's', ...input }), list: () => captured.scheduleTasks };
     return undefined;
   },
   systemPrompt: { context: (c) => captured.contexts.push(c) },
   timer: {
-    // 捕获回调，供测试驱动 boot/tick（验证静默窗口抑制与用户消息中止）
+    // 2026-09-01：捕获回调，供测试驱动 boot/tick（验证静默窗口抑制与用户消息中止）
     setTimeout: (fn) => { captured.timeoutFns.push(fn); return 1; },
     setInterval: (fn) => { captured.intervalFns.push(fn); return 1; },
   },
@@ -121,7 +122,7 @@ await new Promise((resolve) => setTimeout(resolve, 50)); // 让触发后的异�
 process.stdout.write = origWrite; // 恢复 stdout：此后 console.log 走真实输出
 
 // 先触发一次完整循环（beforeTurn：对话前置协议；reason 恒 pre-turn，无需 trigger——trigger 只
-// 会堆积 dirtyReasons；pre-turn 不再清空 dirty（防吞 state-changed），无效 trigger
+// 会堆积 dirtyReasons；2026-09-03-6 起 pre-turn 不再清空 dirty（防吞 state-changed），无效 trigger
 // 会让后续 tick 驱动块先触发最旧残留 reason，故此处及以下 beforeTurn 驱动的块均不再 trigger）
 const preTurn = await api.beforeTurn();
 
@@ -144,7 +145,7 @@ const checks = [
   ['执行结果写入循环日志', captured.writes.some((w) => w.content.includes('[executed]') && w.content.includes('[deferred]'))],
   ['pre-turn 循环行动告知不投递（2026-09-03 泄露回归）', captured.notifySends.length === 0],
   ['简报含近期用户消息证据块(recent-user-messages)', lastBrief.includes('<recent-user-messages>') && lastBrief.includes('我有点困了，先睡一会儿')],
-  ['简报用户消息带真实时间(at=)', lastBrief.includes('<message at="')],
+  ['简报用户消息带真实时间(at=)', lastBrief.includes('<message at="')], // 2026-09-03-2 时间线修复
   ['决策协议含用户状态感知步骤', lastSystem.includes('感知用户状态变化') && lastSystem.includes('user_state_set')],
 ];
 
@@ -164,21 +165,21 @@ const silentTurn = await api.beforeTurn();
 checks.push(['静默行动：动作已执行', captured.stateSetCalls.some((s) => s.state === '静默状态')]);
 checks.push(['静默行动：未发送告知', captured.notifySends.length === notifyCountBefore]);
 
-// 空文本自动重试（llm 流偶发空返回时自愈）
+// 空文本自动重试（2026-08-30：llm 流偶发空返回时自愈）
 api.endConversation();
 EMPTY_NEXT = true;
 DECISION_TEXT = '{"analysis":"重试测试通过","shouldSpeak":false,"shouldAct":false,"actions":[],"consequenceAssessment":"","notifyUser":false}';
 const retryTurn = await api.beforeTurn();
 checks.push(['空文本自动重试后成功', retryTurn?.decision?.analysis === '重试测试通过']);
 
-// 降频开关（configure 支持 reducedMode，stats 反映生效间隔）
+// 降频开关（2026-08-30：configure 支持 reducedMode，stats 反映生效间隔）
 const cfgOn = api.configure({ reducedMode: true });
 const statsOn = api.stats();
 checks.push(['降频开关开启生效', cfgOn.reducedMode === true && cfgOn.effectiveFallbackMs === 1800000 && statsOn.config.reducedMode === true]);
 api.configure({ reducedMode: false });
 checks.push(['降频开关关闭恢复', api.stats().config.effectiveFallbackMs === 300000]);
 
-// ── 睡眠/清醒期 ──
+// ── 睡眠/清醒期（2026-08-31 用户设计）──
 // 缩短参数便于测试：1s 进入延迟 / 60s 上限 / 1s 冷却 / 60s 任务窗口
 api.configure({ sleepEnterDelayMs: 1000, sleepMaxMs: 60000, sleepCooldownMs: 1000, sleepCheckWindowMs: 60000 });
 const origStateGet = memoryApi.state.get;
@@ -242,7 +243,7 @@ memoryApi.state.get = origStateGet;
 captured.scheduleTasks = [];
 checks.push(['睡眠参数恢复默认', api.stats().config.sleepEnterDelayMs === 1800000]);
 
-// ── 用户消息 → 暂停时间驱动循环 30s + 中止运行中的时间驱动循环 ──
+// ── 2026-09-01 用户消息 → 暂停时间驱动循环 30s + 中止运行中的时间驱动循环 ──
 // 需求：防止兜底思维循环与对话思维循环并行运行并同时输出对话 → 割裂感。
 // 本质：并行的两个循环用同一时刻记忆 → 行为并列而非延续 → 须中止并清理记录/回退行为。
 const userMsgHandler = captured.handlers?.['session/event'];
@@ -290,7 +291,7 @@ SLOW_LLM = false;
 api.configure({ quietAfterUserMs: 180000 });
 checks.push(['静默窗口参数恢复默认(180s)', api.stats().config.quietAfterUserMs === 180000]);
 
-// ── pre-turn 无条件禁言 ──
+// ── 2026-09-01 复现修复：6:48 事件 = pre-turn 循环在对话回合结束后投递主动发言 ──
 // D) pre-turn 按 reason 无条件禁言：即使经 trigger('pre-turn') 绕过 beforeTurn 的 suppressSpeak，
 //    也不投递发言（不 notify、不写 <loop-speak>，仅决策留档）
 api.endConversation();
@@ -325,7 +326,9 @@ sCheck('被中止 pre-turn 未更新 lastDecision', api.state().lastDecisionAt =
 SLOW_LLM = false;
 api.endConversation();
 
-// ── 睡眠期跟随真实唤醒信号：TTL 到期≠醒来 ──
+// ── 2026-09-03 记忆错乱修复回归：睡眠期跟随真实唤醒信号，TTL 到期≠醒来 ──
+// 实机事故链：08:57 置"睡眠中"(TTL 12h→20:57)；09:41 进入睡眠期；20:57 TTL 到期后旧逻辑
+// 把"行消失"当"用户醒来" → cooldown → 18:16-22:40 睡眠中被连环主动消息打扰、旧问答串线。
 api.configure({ sleepEnterDelayMs: 1000, sleepMaxMs: 60000, sleepCooldownMs: 1000, sleepCheckWindowMs: 60000 });
 const origGet2 = memoryApi.state.get;
 
@@ -359,7 +362,8 @@ api.configure({ sleepEnterDelayMs: 1800000, sleepMaxMs: 28800000, sleepCooldownM
 setUserAwake();
 checks.push(['睡眠参数恢复默认(回归块后)', api.stats().config.sleepEnterDelayMs === 1800000]);
 
-// ── 静默窗对**一切**主动发言生效（含事件驱动 state-changed）──
+// ── 2026-09-03-2 时间线/重复推送修复回归：静默窗对**一切**主动发言生效（含事件驱动 state-changed）──
+// 实机：00:00:30"当然关心啊"串线推送的 trigger=state-changed（事件驱动，旧逻辑不受 30s 静默窗约束）
 api.configure({ quietAfterUserMs: 150, sleepEnterDelayMs: 1800000 });
 const notifyBeforeI = captured.notifySends.length;
 DECISION_TEXT = '{"analysis":"静默窗发言测试","shouldSpeak":true,"speakContent":"不应在静默窗内投递","shouldAct":false,"actions":[],"consequenceAssessment":"无","notifyUser":false}';
@@ -378,7 +382,9 @@ sCheck('静默窗过期后主动发言可投递(notify +1)', captured.notifySend
 api.configure({ quietAfterUserMs: 180000 });
 checks.push(['静默窗参数恢复默认(180s, I 块后)', api.stats().config.quietAfterUserMs === 180000]);
 
-// ── 凭证缺失冷却：MISSING_CREDENTIAL 不再 30s 风暴，配置事件唤醒 ──
+// ── 2026-09-03 凭证缺失冷却回归：MISSING_CREDENTIAL 不再 30s 风暴，配置事件唤醒 ──
+// 手机端实测：无 API key 时 loop 失败置 dirty → 每 30s tick 重试（error#1..#14 刷屏），
+// 每次重试先做 SQLite 召回/简报构造 → 周期性拖慢同机网页打开。修复后进入 5 分钟冷却。
 {
   api.configure({ credentialRetryMs: 300000 });
   const cycBefore = api.stats().cycleCount;
@@ -409,7 +415,7 @@ checks.push(['静默窗参数恢复默认(180s, I 块后)', api.stats().config.q
   api.configure({ credentialRetryMs: 300000 });
 }
 
-// ── 告知分级：pre-turn 零告知 / 静默内部动作强制压制 / panel 流水 / notify_send 门控 ──
+// ── 2026-09-03 告知分级/割裂修复回归（实机 03:49"🤖 主动行动：已执行 memory_write"泄露进用户对话）──
 // 语义：
 //  1) pre-turn（对话前置，用户正在对话）→ 行动照常执行但**零告知**（发言已禁，状态串/notify_send 同禁）；
 //  2) user_state_set/user_state_clear/memory_write 为静默内部动作 → 即使 notifyUser=true 也代码强制压制
@@ -419,7 +425,7 @@ checks.push(['静默窗参数恢复默认(180s, I 块后)', api.stats().config.q
 // 清理残留静默窗：确保时间驱动触发不被 quiet 拦截（本段触发全部要求窗口已过期）
 if ((api.state().quietLeftMs ?? 0) > 0) await new Promise((r) => setTimeout(r, (api.state().quietLeftMs ?? 0) + 200));
 
-// 1) pre-turn + notifyUser=true + memory_write → 动作执行但零告知
+// 1) pre-turn + notifyUser=true + memory_write → 动作执行但零告知（03:49 泄露直接回归）
 api.endConversation();
 const nPreTurnAct = captured.notifySends.length;
 DECISION_TEXT = '{"analysis":"对话内动作","shouldSpeak":false,"shouldAct":true,"actions":[{"name":"memory_write","args":{"content":"对话内衔接记忆"},"reason":"衔接上下文"}],"consequenceAssessment":"零打扰完全可逆","notifyUser":true}';
@@ -466,7 +472,7 @@ captured.intervalFns[0]();
 await new Promise((r) => setTimeout(r, 200));
 sCheck('notify_send 在 pre-turn 被门控(不投递)', captured.notifySends.length === nNs2, `notify=${captured.notifySends.length} base=${nNs2}`);
 
-// ── 双 Agent（记忆加工 + 输出审查） ──
+// ── 2026-09-03-9 双 Agent（记忆加工 + 输出审查）回归 ──
 {
   api.configure({ dualAgent: true, quietAfterUserMs: 60 });
   api.endConversation();
@@ -508,7 +514,7 @@ sCheck('notify_send 在 pre-turn 被门控(不投递)', captured.notifySends.len
   checks.push(['双Agent 关闭参数生效', api.stats().config.dualAgent === false]);
 }
 
-// ── 思维预设（用户指令注入；决策+审查+对话自检；适配双 Agent） ──
+// ── 2026-09-04-2 思维预设（用户指令注入；决策+审查+对话自检；适配双 Agent）回归 ──
 {
   api.configure({ quietAfterUserMs: 120, dualAgent: false });
   // 1) 零配置 = 零注入（默认无预设/无条目 → 简报不含 <user-instructions>）
@@ -579,7 +585,7 @@ sCheck('notify_send 在 pre-turn 被门控(不投递)', captured.notifySends.len
   api.endConversation();
   await api.beforeTurn('清理验证');
   checks.push(['思维预设：清理后零注入', !lastDecisionBrief.includes('<user-instructions>')]);
-  // 7) dialogue 自检注入须按 activePresetId 过滤——
+  // 7) 2026-09-07 审计修复守卫：dialogue 自检注入须按 activePresetId 过滤——
   //    ①未启用任何预设（activePresetId=''）时历史保存过的 dialogue 指令不得注入对话自检（零注入承诺）；
   //    ②激活 A 预设时 B 预设的 dialogue 指令不得注入（单活跃预设语义）。
   api.configure({ dualAgent: true });

@@ -1,10 +1,10 @@
-﻿# DSH-ARCHIVE 系统托盘常驻
+# DSH-ARCHIVE 系统托盘常驻（2026-08-30 v3）
 # 用法：由 start.ps1 自动启动；或手动 powershell -File tray.ps1
 # 功能：左键单击打开控制台；右键菜单 = 打开/重启/停止服务、退出托盘。
-# 设计：幂等（互斥锁，同一时刻只保留一个托盘实例，杜绝进程堆积）；
-#       PID 记录到 dsh\data\tray.pid（两行：PID / 进程名，在 Add-Type 前尽早写入，
-#       消除"托盘未就绪时关闭按钮错过清理"的竞态），供 stop.ps1 与关闭按钮清理；
-#       图标优先使用项目自带 assets\tray.ico，缺失时回退通用图标。
+# v3 变更：PID 文件写入提前到 Add-Type 之前（消除"托盘未就绪时关闭按钮错过清理"的竞态）。
+# v2 变更：幂等（互斥锁，同一时刻只保留一个托盘实例，杜绝进程堆积）；
+#          PID 记录到 dsh\data\tray.pid（两行：PID / 进程名），供 stop.ps1 与关闭按钮清理；
+#          图标优先使用项目自带 assets\tray.ico，缺失时回退通用图标。
 
 $url = 'http://127.0.0.1:3081'
 $root = Split-Path $MyInvocation.MyCommand.Definition -Parent
@@ -20,7 +20,7 @@ if (-not $mutex.WaitOne(0)) {
 }
 
 # --- 尽早记录 PID 与进程名（Add-Type 之前；否则托盘初始化需数秒，关闭按钮可能错过清理） ---
-# 失败不静默：写入诊断日志（便于排查 stop.ps1/关闭按钮找不到 tray.pid 的情况）。
+# 2026-08-30 审计修复：失败不再静默——写入诊断日志，避免 v3 竞态修复静默降级（stop.ps1/关闭按钮找不到 tray.pid）。
 try {
   New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
   "$PID`npowershell" | Out-File $pidFile -Encoding ascii
@@ -28,7 +28,7 @@ try {
   try { Add-Content -Path (Join-Path $env:TEMP 'dsh-tray.log') -Value ("{0} tray.pid 写入失败: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $_.Exception.Message) -Encoding UTF8 } catch { }
 }
 
-# Add-Type/初始化失败时清理 PID 文件并释放互斥锁，避免遗留过期 tray.pid
+# 2026-08-30 审计修复：Add-Type/初始化失败时清理 PID 文件并释放互斥锁，避免遗留过期 tray.pid
 # 导致 stop.ps1/关闭按钮误判（PID 复用时可误杀无关 powershell）。
 try {
   Add-Type -AssemblyName System.Windows.Forms

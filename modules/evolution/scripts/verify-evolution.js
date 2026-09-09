@@ -1,6 +1,6 @@
 // 自进化集成验证（stub ctx，假 LLM）：
 // 主流程 suggest（人格 YAML 通道 add/refine + skill JSON 通道）→ 隔离评估 → approve/rollback；
-// 人格通道：近 24h 对话打包（★重点标记、跨窗口排除）、当前人格清单含 id 注入、
+// 人格通道（2026-09-02）：近 24h 对话打包（★重点标记、跨窗口排除）、当前人格清单含 id 注入、
 // YAML 严格子集解析（add/refine 归一）、refine 经 persona.update 应用、版本级回滚；
 // 自动建议（每日定时 / autoRun 通知 / 去重）；skill 写库与回滚。
 import { rmSync, existsSync, readFileSync } from 'node:fs';
@@ -70,7 +70,7 @@ const S2_JSON = '[{"type":"skill-improve","name":"code-review-checklist","conten
 const P3_YAML = P1_YAML;
 const S3_JSON = S1_JSON;
 const EVAL_TEXT = '{"conflictScore":0.05,"safe":true,"recommendation":"approve","reason":"与现有准则无冲突"}';
-// 守护：\u0000R\u0000 前缀 = 输出全部经 reasoning-delta 送达（正文为空）——
+// 2026-09-03-5 守护：\u0000R\u0000 前缀 = 输出全部经 reasoning-delta 送达（正文为空）——
 // 验证推理模型"答案写进思考段"时 evolution callLlm 的 reasoning 兜底真实生效
 const REASON = '\u0000R\u0000';
 async function* fakeStream(text) {
@@ -127,7 +127,7 @@ const ctx = {
     }),
     set: (entries, opts) => { captured.personaSets.push({ entries, opts }); persVersion += 1; return { version: persVersion, added: entries.length }; },
     update: (id, patch) => { captured.personaUpdates.push({ id, patch }); persVersion += 1; return { id, content: patch.content }; },
-    // 凝练写入：整体重建（by=distill）
+    // 2026-09-08 凝练写入：整体重建（by=distill）
     replace: (entries, opts) => { captured.personaReplaces.push({ entries, opts }); persVersion += 1; return { version: persVersion, added: entries.length }; },
     rollback: (v, by) => { captured.rollbacks.push({ v, by }); return { rolledBack: true }; },
   },
@@ -185,13 +185,13 @@ try {
   await api.approve(skillId, { by: 'user', confirm: true });
   const skillFile = join(skillsDir, 'code-review-checklist', 'SKILL.md');
   checks.push(['skill 采纳写库 + runtime 注册', existsSync(skillFile) && captured.skillsRegistered.some((s) => s.name === 'code-review-checklist')]);
-  // 守卫：runtime 注册必须带 content——宿主 dsh-skill get() 对
+  // 2026-09-07 回归守卫（中危-4 修复）：runtime 注册必须带 content——宿主 dsh-skill get() 对
   // runtime 技能走 validateDefinition 强制 content 为 string，缺 content 时 agent 加载必抛 TypeError。
   checks.push(['skill runtime 注册带 content 正文', captured.skillsRegistered.some((s) => s.name === 'code-review-checklist' && typeof s.content === 'string' && s.content.length > 0)]);
   const rbSkill = await api.rollback(skillId, { by: 'user', confirm: true });
   checks.push(['skill 回滚删除原库', rbSkill.rolledBack === true && !existsSync(join(skillsDir, 'code-review-checklist'))]);
 
-  // ================= 自动建议（双通道） =================
+  // ================= 自动建议（2026-09-02 双通道） =================
   checks.push(['autoSuggest 已安排每日定时', timerCalls.length >= 1 && timerCalls[0].ms >= 1000]);
   const st0 = api.stats();
   checks.push(['stats.auto 暴露下次生成时间', st0.auto?.enabled === true && typeof st0.auto?.nextAutoAt === 'number' && st0.auto.nextAutoAt > 0]);
@@ -217,9 +217,9 @@ checks.push(['5 个工具注册', captured.tools.join(',') === 'evolution_sugges
 checks.push(['账本文件存在', existsSync(ledgerPath)]);
 checks.push(['LLM 调用全部按队列消费', queue.length === 0]);
 
-// ================= YAML 解析器容错（行尾注释 / 块正文 # 行） =================
-// LLM 会照抄 schema 示例的行尾注释（`- action: add  # add=新增条目` / `importance: 0.7  # 可选`），
-// 解析须剥离行尾注释、且把块标量正文中的 # 行视为正文（见 persona-plan.js
+// ================= 2026-09-03 修复回归：YAML 解析器容错（行尾注释 / 块正文 # 行） =================
+// 实机形态：LLM 照抄 schema 示例的行尾注释（`- action: add  # add=新增条目` / `importance: 0.7  # 可选`），
+// 旧解析器把注释并入值 → action 恒等失败、条目被静默丢弃、人格通道整条无产出（修复见 persona-plan.js
 // stripInlineComment + 块标量先于注释判断）。
 const PP_SECTIONS = ['identity', 'values', 'traits', 'style', 'directives', 'capabilities'];
 const ppParse = (yaml) => ppMod.parsePersonaPlan(yaml, PP_SECTIONS);
@@ -265,7 +265,7 @@ try {
   checks.push([`YAML 容错回归无异常: ${error.message}`, false]);
 }
 
-// ================= 人格一键凝练（LLM 无损整理） =================
+// ================= 2026-09-08 人格一键凝练（LLM 无损整理） =================
 // 覆盖：YAML 严格子集解析（merged_from 列表/行尾注释/块正文 # 行/整行注释）、id 覆盖硬约束
 // （遗漏/伪造/重复检出）、distillPersona 预览不生效、applyPersonaDistill（token 守卫/版本守卫/
 // persona.replace by=distill + mergedFrom 溯源）、覆盖失败重试后明确报错。

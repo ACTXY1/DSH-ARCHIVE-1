@@ -6,7 +6,7 @@
 #  用法：进入项目根目录后执行
 #    bash update.sh                    # 更新到最新
 #    bash update.sh -Rollback          # 回退到上一个发布版
-#    bash update.sh -Rollback -TargetTag v2026-09-08
+#    bash update.sh -Rollback -TargetTag v2026-09-01
 #  开发/测试开关：-NoFetch（跳过 git fetch） -NoStop（不停服） -NoStart（更新后不启动）
 #
 #  流程：校验 → git 检查 → fetch（失败不打扰服务）→ 版本比较（已最新则退出，

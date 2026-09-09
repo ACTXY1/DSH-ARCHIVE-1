@@ -1,4 +1,4 @@
-// dsh-archive-control Client 半部（DSH 原生风格 + 完整功能页）
+// dsh-archive-control Client 半部（2026-08-29 迭代：DSH 原生风格 + 完整功能页）
 //  - 仍整体替换 root 座位（专属界面），但视觉全面改用 DSH 原生主题 token
 //    （--dsw-alias-* / --dsw-specific-sidebar-fill / --dsw-font-family 等），
 //    随原生浅色/深色主题自动适配，观感与 DSH 原生 UI 一致。
@@ -34,10 +34,10 @@ window.__ModuleLoader__.load({
       return '清醒';
     }
     function pct(x) { return `${Math.round(Number(x ?? 0) * 100)}%`; }
-    // 会话历史尾部初始页条数（60 条；向上翻页 loadOlder 仍 100 条/次）。
+    // 2026-09-02 性能优化：会话历史尾部初始页条数（60 条约 1.1MB，向上翻页 loadOlder 仍 100 条/次）。
     // 用户可经「↑ 加载更早消息」按钮/滚到顶部逐页上翻直至最早一条（hasMore=false 按钮消失），历史不截断。
     const HISTORY_PAGE = 60;
-    /** 事件内容块：assistant/message 的 content 在 data.message.content（嵌套），user/message 在 data.content（直接）——两者都要兼容。 */
+    /** 事件内容块：assistant/message 的 content 在 data.message.content（嵌套），user/message 在 data.content（直接）——两者都要兼容（2026-08-30 修复"AI 无应答"根因）。 */
     function blocksOf(ev) {
       const d = ev?.data;
       if (!d) return [];
@@ -45,14 +45,14 @@ window.__ModuleLoader__.load({
       if (Array.isArray(d.content)) return d.content;
       return [];
     }
-    /** 用户状态类工具调用对用户隐藏：状态更新是后台静默行为，聊天界面不展示这些工具调用；
+    /** 用户状态类工具调用对用户隐藏（2026-08-30）：状态更新是后台静默行为，聊天界面不展示这些工具调用；
      *  仅当用户明确要求演示状态更新时，AI 会在回复正文中说明（工具 chip 仍不上屏）。 */
     const HIDDEN_STATE_TOOLS = ['user_state_set', 'user_state_clear', 'user_state_get'];
     /**
-     * 会话事件 → 消息列表：
+     * 会话事件 → 消息列表（2026-08-30 流式/分页改造）：
      * 1) 过滤系统注入上下文（user/message 且 source.kind !== 'user' —— 含 file policy/approval/<time>/<persona>/记忆注入、
-     *    skill-catalog 技能目录 <system-reminder> 等，均非真实用户输入；仅 kind==='user' 视为真实用户消息，
-     *    kind==='plugin' 的非注入说明（如人格一致性拦截）保留为系统提示）；
+     *    skill-catalog 技能目录 <system-reminder> 等，均非真实用户输入，曾整段上屏显示为"你"的消息；仅 kind==='user'
+     *    视为真实用户消息，kind==='plugin' 的非注入说明（如人格一致性拦截）保留为系统提示）；
      * 2) assistant/message 聚合为单条复合消息：text=回答 / reasoning=思考过程（折叠区）/ tool=工具调用列表；
      * 3) assistant/chunk 流式增量不在此展开（由 SSE 的 inFlight 流式条目实时展示，历史回放时以 assistant/message 为准）。
      */
@@ -63,13 +63,15 @@ window.__ModuleLoader__.load({
         const blocks = blocksOf(ev);
         if (ev?.type === 'user/message') {
           const txt = blocks.map((b) => (b?.type === 'text' ? b.text : b?.type === 'image' ? `[图片 ${b.name || b.mediaType || ''}]` : '')).filter(Boolean).join('\n');
-          // source.kind 白名单过滤系统注入：skill-catalog（每回合注入的技能目录 <system-reminder>）与
-          // runtime-context 等系统注入的 kind 非 user → 全部跳过，不进入聊天流；真实用户消息 source.kind==='user'。
+          // 2026-09-04 BUG 修复：source.kind 白名单过滤系统注入。skill-catalog（每回合注入的
+          // 技能目录 <system-reminder>）曾因不匹配 "Current runtime context" 前缀而被渲染成"你"的
+          // 用户气泡（用户输入后弹出大段技能清单）。真实用户消息 source.kind==='user'；runtime-context/
+          // skill-catalog 等注入 kind 非 user → 全部跳过，不进入聊天流。
           const kind = ev.data?.source?.kind;
           if (kind === 'user') {
             if (txt) out.push({ role: 'user', text: txt, time: ev.time ?? 0, key: `e${ev.seq}` });
           } else if (kind === 'plugin') {
-            // plugin kind 中非注入的说明（人格一致性拦截说明等）渲染为系统提示，
+            // 2026-08-31 审计修复：plugin kind 中非注入的说明（人格一致性拦截说明等）渲染为系统提示，
             // 避免被误认为"你"的用户气泡；runtime-context 注入（"Current runtime context" 开头）跳过。
             if (txt && !txt.startsWith('Current runtime context')) out.push({ role: 'system', text: txt, time: ev.time ?? 0, key: `e${ev.seq}` });
           }
@@ -86,7 +88,7 @@ window.__ModuleLoader__.load({
             }
           }
           const entry = { role: 'assistant', text, reasoning, tools, time: ev.time ?? 0, key: `e${ev.seq}` };
-          // 人格一致性渲染层替换显示：suspicious → 修订版文本 + 角标；blocked → 拦截样式
+          // 2026-08-31 人格一致性渲染层替换显示：suspicious → 修订版文本 + 角标；blocked → 拦截样式
           const hit = seqMap && seqMap[ev.seq];
           if (hit) {
             if (hit.v === 'suspicious' && hit.r) { entry.text = hit.r; entry.revised = true; }
@@ -113,7 +115,7 @@ window.__ModuleLoader__.load({
       return seg.length > 0 ? seg[seg.length - 1] : '工作区';
     }
 
-    // ---------- 消息富文本渲染：markdown-lite + describe-image 引用缩略图 ----------
+    // ---------- 消息富文本渲染（2026-08-30）：markdown-lite + describe-image 引用缩略图 ----------
     // 行内解析：`code` / **bold** / [text](url)（url 仅允许 http(s) 与站内路径，防 javascript: 注入）
     function inlineParts(text) {
       const out = [];
@@ -168,7 +170,7 @@ window.__ModuleLoader__.load({
       }
       return nodes.length > 0 ? nodes : null;
     }
-    // 自循环活动流：解析 <loop-decision> 记忆正文
+    // 自循环活动流：解析 <loop-decision> 记忆正文（2026-08-30）
     function parseLoopDecision(content) {
       const c = String(content ?? '');
       const time = c.match(/time="([^"]*)"/)?.[1] ?? '';
@@ -178,7 +180,7 @@ window.__ModuleLoader__.load({
       const act = c.match(/<act>([\s\S]*?)<\/act>/)?.[1] ?? '';
       return { time, trigger, analysis, speak, act };
     }
-    // 消息提示音：Web Audio 合成双音；浏览器自动播放策略要求用户首次交互后解锁
+    // 消息提示音（2026-08-30）：Web Audio 合成双音；浏览器自动播放策略要求用户首次交互后解锁
     let audioCtxRef = null;
     function playBeep() {
       try {
@@ -220,6 +222,7 @@ window.__ModuleLoader__.load({
 
     // ---------- 主程序 ----------
     function apply(ctx) {
+      // 2026-08-30 加载诊断：硬刷新后若 Console 无此日志，说明 bundle 未执行（缓存/加载失败）
       try { console.log('[archive-control] client apply start'); } catch { /* ignore */ }
       const slots = ctx.get('slots');
       if (slots === undefined) return;
@@ -299,10 +302,10 @@ window.__ModuleLoader__.load({
 @keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
 .arc-msg.user{align-self:flex-end;background:var(--arc-brand);color:#fff;border-bottom-right-radius:4px}
 .arc-msg.ai{align-self:flex-start;background:var(--arc-l1);border:1px solid var(--arc-bd);border-bottom-left-radius:4px}
-/* 系统消息（人格一致性拦截说明等 source.kind==='plugin'）灰字居中系统样式 */
+/* 2026-08-31 审计修复：系统消息（人格一致性拦截说明等 source.kind==='plugin'）灰字居中系统样式 */
 .arc-msg.sys{align-self:center;background:transparent;border:1px dashed var(--arc-bd);color:var(--arc-faint);font-size:12px;max-width:92%;padding:6px 12px;border-radius:8px}
 .arc-msg .who{font-size:10.5px;opacity:.75;margin-bottom:3px}
-/* 思维链/工具调用：仿 DSH 本体——小字、折叠显示，不占主阅读流 */
+/* 思维链/工具调用（2026-08-30：仿 DSH 本体——小字、折叠显示，不占主阅读流） */
 .arc-msg .arc-reason{align-self:flex-start;max-width:100%;font-size:11.5px;color:var(--arc-dim);background:transparent;border:1px dashed var(--arc-bd);border-radius:8px;padding:4px 8px;margin:2px 0 8px}
 .arc-msg .arc-reason summary{cursor:pointer;color:var(--arc-dim);user-select:none;font-size:11.5px}
 .arc-msg .arc-reason summary:hover{color:var(--arc-tx)}
@@ -371,9 +374,9 @@ window.__ModuleLoader__.load({
 .arc-confirm .box{background:var(--arc-ol);border:1px solid var(--arc-bd2);border-radius:12px;padding:18px;width:360px;max-width:90vw;box-shadow:0 8px 40px rgba(0,0,0,.4)}
 .arc-confirm .msg{font-size:13px;line-height:1.7;margin-bottom:14px;white-space:pre-wrap;word-break:break-word}
 .arc-confirm .ops{display:flex;justify-content:flex-end;gap:8px}
-/* ---- 未配置模型提供商横幅 ---- */
+/* ---- 未配置模型提供商横幅（2026-08-30） ---- */
 .arc-banner-warn{background:rgba(255,176,32,.1);border:1px solid rgba(255,176,32,.45);color:#f5a623;border-radius:10px;padding:10px 14px;font-size:13px;line-height:1.6;margin-bottom:12px}
-/* ---- 消息富文本：markdown-lite + 图片引用缩略图 ---- */
+/* ---- 消息富文本（2026-08-30）：markdown-lite + 图片引用缩略图 ---- */
 .arc-msg-p{margin:2px 0;white-space:pre-wrap;word-break:break-word}
 .arc-msg-p:first-child{margin-top:0}
 .arc-msg-p:last-child{margin-bottom:0}
@@ -382,7 +385,7 @@ window.__ModuleLoader__.load({
 .arc-msg pre code{background:none;border:none;padding:0;border-radius:0}
 .arc-msg img.arc-msg-img{max-width:min(320px,100%);max-height:220px;object-fit:contain;border-radius:10px;border:1px solid var(--arc-bd);margin:4px 0;display:block;cursor:zoom-in}
 .arc-msg a{color:var(--arc-brand)}
-/* ---- 输入框图片按钮与粘贴预览条：粘贴图片/预览/随消息发送 ---- */
+/* ---- 输入框图片按钮与粘贴预览条（2026-08-30：粘贴图片/预览/随消息发送） ---- */
 .arc-img-btn{flex:none;width:40px;border:1px solid var(--arc-bd);border-radius:10px;background:var(--arc-l1);color:var(--arc-dim);cursor:pointer;font-size:16px}
 .arc-img-btn:hover{border-color:var(--arc-brand);color:var(--arc-tx)}
 .arc-img-btn:disabled{opacity:.5;cursor:wait}
@@ -406,15 +409,15 @@ window.__ModuleLoader__.load({
 .arc-wss .arc-del{display:none;flex:none;width:18px;height:18px;border:none;background:transparent;color:var(--arc-faint);cursor:pointer;font-size:12px;border-radius:5px;line-height:1}
 .arc-wss:hover .arc-del{display:inline-flex;align-items:center;justify-content:center}
 .arc-wss .arc-del:hover{color:var(--arc-err);background:var(--arc-l2)}
-/* ---- 流式输出开关 / 流式消息 / 工具调用 ---- */
+/* ---- 流式输出开关 / 流式消息 / 工具调用（2026-08-30） ---- */
 .arc-stream-toggle{flex:none;border:1px solid var(--arc-bd);border-radius:8px;background:var(--arc-l1);color:var(--arc-dim);cursor:pointer;font-size:12px;padding:4px 10px}
 .arc-stream-toggle:hover{border-color:var(--arc-brand);color:var(--arc-tx)}
 .arc-msg.ai.streaming{box-shadow:0 0 0 1px rgba(124,170,255,.35)}
-/* 人格一致性：被拦截消息灰显斜体 */
+/* 人格一致性（2026-08-31）：被拦截消息灰显斜体 */
 .arc-msg.ai.intercepted{opacity:.62;font-style:italic;border-style:dashed;background:var(--arc-ol)}
 .arc-tools{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 6px}
 .arc-tool-chip{font-size:11px;color:var(--arc-dim);background:var(--arc-ol);border:1px solid var(--arc-bd);border-radius:6px;padding:1px 6px}
-/* ---- 目录浏览弹窗（browse 能力） ---- */
+/* ---- 目录浏览弹窗（browse 能力，2026-09-02 手机端修复） ---- */
 .arc-browse{width:min(480px,92vw);max-width:none}
 .arc-browse-crumbs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
 .arc-browse-path{font-size:12px;color:var(--arc-faint);word-break:break-all;margin-bottom:8px;font-family:var(--arc-mono)}
@@ -422,7 +425,7 @@ window.__ModuleLoader__.load({
 .arc-browse-item{text-align:left;justify-content:flex-start;padding:7px 10px;font-size:13px;border:1px solid transparent}
 .arc-browse-item:hover{border-color:var(--arc-brand)}
 .arc-browse-item.hidden{opacity:.55}
-/* ---- 记录面板 Dock：底部可收起、提示词/报错双页签；.arc-app 以 --arc-dock-h 告知展开高度，
+/* ---- 记录面板 Dock（阶段六）：底部可收起、提示词/报错双页签；.arc-app 以 --arc-dock-h 告知展开高度，
    toast 等 fixed 浮层据此上移避让，展开/收起均不遮挡内容 ---- */
 .arc-dock{flex:none;display:flex;flex-direction:column;border-top:1px solid var(--arc-bd);background:var(--arc-l1)}
 .arc-dock-bar{display:flex;align-items:center;gap:8px;height:36px;min-height:36px;padding:0 10px;font-size:12px;color:var(--arc-dim)}
@@ -445,7 +448,7 @@ window.__ModuleLoader__.load({
 .arc-led-msg{flex:1;min-width:0;color:var(--arc-dim);font-size:11.5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
 .arc-led-exp{white-space:pre-wrap;word-break:break-word;font-family:var(--arc-mono);font-size:11px;line-height:1.65;color:var(--arc-dim);padding:6px 10px;border-top:1px dashed var(--arc-bd);max-height:170px;overflow-y:auto}
 .arc-led-ops{margin-left:auto;display:flex;gap:4px;flex:none}
-/* ---- 审批卡（仿 DSH 本体 ApprovalPanel：warn 描边卡 + 条头 + 拒绝/允许一次） ---- */
+/* ---- 审批卡（2026-09-04，仿 DSH 本体 ApprovalPanel：warn 描边卡 + 条头 + 拒绝/允许一次） ---- */
 .arc-aprv-wrap{display:flex;flex-direction:column;gap:8px;padding:10px 20px 0}
 /* 功能页悬浮审批（fixed 于底部中央上方，避开记录面板） */
 .arc-aprv-float{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--arc-dock-h, 36px));z-index:900;width:min(560px,calc(100vw - 48px));display:flex;flex-direction:column;gap:8px;max-height:40vh;overflow-y:auto}
@@ -455,7 +458,7 @@ window.__ModuleLoader__.load({
 .arc-aprv-strip .tl{opacity:.75;font-size:11px}
 .arc-aprv-body{padding:10px 14px 0;font-size:13px;line-height:1.6;color:var(--arc-tx);word-break:break-word;max-height:96px;overflow-y:auto}
 .arc-aprv-actions{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px 12px}
-/* ---- 权限预设（仿 DSH 本体 composer 访问模式） ---- */
+/* ---- 权限预设（2026-09-04，仿 DSH 本体 composer 访问模式） ---- */
 .arc-perm-row{display:flex;align-items:center;gap:8px;padding:8px 20px 0}
 .arc-perm-row .lbl{font-size:11px;color:var(--arc-faint);flex:none}
 .arc-perm-wrap{position:relative;flex:none}
@@ -484,7 +487,7 @@ window.__ModuleLoader__.load({
       const timer = ctx.get('timer');
 
       // 统一规范化 RPC 响应：服务端错误 result.error 是对象 {code,message,details}，
-      // 直接拼进 toast 会显示 "[object Object]" —— 统一提取 message。
+      // 直接拼进 toast 会显示 "[object Object]" —— 统一提取 message（2026-08-30 修复）。
       function normResult(res) {
         if (res === null || res === undefined) return { ok: false, error: 'no response' };
         if (res.ok === false && res.error && typeof res.error !== 'string') {
@@ -511,14 +514,14 @@ window.__ModuleLoader__.load({
       async function api(method, payload) {
         try {
           if (connection === undefined) return { ok: false, error: 'connection unavailable' };
-          // payload 必须直传（不可包 {args:...}）：api-gateway 直接校验顶层字段，
-          // 包一层 args 会使 session.prompt/history/cancel/rename 全部报 "invalid payload" 而发送失败。
+          // 2026-08-30 修复：payload 必须直传（不可包 {args:...}）——api-gateway 直接校验顶层字段，
+          // 包一层 args 会使 session.prompt/history/cancel/rename 全部报 "invalid payload" → 发送失败。
           const res = await connection.rpc.call('/api', method, payload);
           return normResult(res);
         } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
       }
 
-      // ===== 浏览器端错误捕获：window error / unhandledrejection → ledger 报错面板 =====
+      // ===== 浏览器端错误捕获（阶段六）：window error / unhandledrejection → ledger 报错面板 =====
       if (typeof window !== 'undefined' && typeof ctx.effect === 'function') {
         ctx.effect(() => {
           let lastPush = 0;
@@ -591,13 +594,14 @@ window.__ModuleLoader__.load({
         const [newWsId, setNewWsId] = useState('');
         const [newWsPath, setNewWsPath] = useState('');
         const [pickingDir, setPickingDir] = useState(false);
-        const [browseOpen, setBrowseOpen] = useState(false); // browse 能力下自绘目录浏览弹窗
-        // 未读通知角标 / 回复中指示 / 图片上传（粘贴+预览+随消息发送）/ 会话重命名 / 桌面通知
+        const [browseOpen, setBrowseOpen] = useState(false); // 2026-09-02：browse 能力下自绘目录浏览弹窗
+        // 2026-08-30：未读通知角标 / 回复中指示 / 图片上传（粘贴+预览+随消息发送）/ 会话重命名 / 桌面通知
         const [unread, setUnread] = useState(0);
         const [replying, setReplying] = useState(false);
-        // "回复中" 60s 兜底 timer 统一经 ref 管理：每次进入生成态
-        // （发送成功 / 每收到 chunk 活动信号）都重置计时；真实结束（message 帧/停止/切换）清除，
-        // 避免多次发送叠加旧 timer、长回复持续输出时中途误把"停止"复位成"发送"。
+        // 2026-09-07 修复（L7）："回复中" 60s 兜底 timer 统一经 ref 管理——
+        // ①多次发送各自 setTimeout，旧 timer 会在仍在生成时提前把"停止"复位成"发送"；
+        // ②长回复持续输出时固定 60s 计时也会中途误复位。改语义：每次进入生成态
+        // （发送成功 / 每收到 chunk 活动信号）都重置计时；真实结束（message 帧/停止/切换）清除。
         const replyingTimerRef = useRef(null);
         const clearReplyingTimer = () => {
           if (replyingTimerRef.current !== null) { try { clearTimeout(replyingTimerRef.current); } catch { /* ignore */ } replyingTimerRef.current = null; }
@@ -617,11 +621,11 @@ window.__ModuleLoader__.load({
         const fileRef = useRef(null);
         const chatRef = useRef(null);
         const pageRef = useRef(null); // 功能页内容区滚动容器（.arc-page）
-        // 人格一致性：会话消息 seq → 判定映射（suspicious 修订版 / blocked 拦截），渲染层替换显示
+        // 2026-08-31 人格一致性：会话消息 seq → 判定映射（suspicious 修订版 / blocked 拦截），渲染层替换显示
         const consistencyMapRef = useRef({});
         const lastConsistencyPullRef = useRef(0);
-        // 滚动粘连：用户上翻时停止自动滚底，回到底部后恢复；滚到顶部时自动加载更早一页历史
-        // （hasMore 时），并保持视口位置。
+        // 滚动粘连（2026-08-30 修复"翻阅历史被拉回底部"）：用户上翻时停止自动滚底，回到底部后恢复；
+        // 2026-08-30 分页：滚到顶部时自动加载更早一页历史（hasMore 时），并保持视口位置。
         const stickRef = useRef(true);
         const onChatScroll = () => {
           const el = chatRef.current;
@@ -636,14 +640,14 @@ window.__ModuleLoader__.load({
         const askConfirm = (msg, onYes) => setConfirm({ msg, onYes });
         const stateRef = useRef({ currentId });
         stateRef.current.currentId = currentId;
-        // 流式输出与聊天缓存：
+        // 2026-08-30 流式/分页改造：
         //  - streamingRef/streaming：流式输出开关（settings archive-ui 持久化；开=SSE 实时增量渲染，关=轮询）
         //  - chatCacheRef：每个会话已加载事件缓存 { bySeq:Map, hasMore, headSeq, tailSeq, loadingOlder }
         //  - inFlightRef：当前会话流式进行中的 assistant 增量（assistant/chunk 累积，assistant/message 落库后清空）
         //  - optimisticRef：发送后立即上屏的用户消息（未落库前占位；收到真实 user/message 事件按文本匹配移除）
         const [streaming, setStreaming] = useState(true);
         const streamingRef = useRef(true);
-        // 权限预设 + 待审批（仿 DSH 本体 composer 的访问模式与 ApprovalPanel）：
+        // 2026-09-04 权限预设 + 待审批（仿 DSH 本体 composer 的访问模式与 ApprovalPanel）：
         //  - perm：当前聊天会话的权限预设状态 {available, sessionId, current, options}
         //  - permOpen：权限下拉是否展开
         //  - pendingApprovals：当前收到的待审批请求（mux approval/requested 帧），
@@ -658,13 +662,13 @@ window.__ModuleLoader__.load({
         const loadingOlderRef = useRef(false);
         const streamAbortRef = useRef(null);
         const renderChatRef = useRef(null); // 由 useCallback 赋值，供 SSE 回调读取
-        // 最近新建的会话（60s 内）始终在侧栏显示；之后恢复"空白非当前隐藏"
+        // 最近新建的会话（60s 内侧栏始终显示，消除新建后因时序/未切回导致的"看不到"；之后恢复"空白非当前隐藏"）
         const newlyCreatedRef = useRef({});
         const isNewlyCreated = (sid) => (newlyCreatedRef.current[sid] ?? 0) > Date.now() - 60000;
-        // 勿扰模式：开启后仅不响提示音，其余不变；ref 供 useCallback 内读取
+        // 勿扰模式（2026-08-30）：开启后仅不响提示音，其余不变；ref 供 useCallback 内读取
         const dndRef = useRef(false);
 
-        // 桌面通知 + 提示音：收到新主动消息弹系统通知并播放提示音；勿扰模式开启时仅不响提示音
+        // 桌面通知 + 提示音（2026-08-30：收到新主动消息弹系统通知并播放提示音；勿扰模式开启时仅不响提示音）
         const notifyDesktop = useCallback((title, body) => {
           try {
             if (typeof Notification === 'undefined') return;
@@ -714,17 +718,17 @@ window.__ModuleLoader__.load({
         const renderChatMessages = useCallback((sessionId) => {
           const c = chatCacheRef.current[sessionId];
           if (!c) return;
-          // 迟到请求守卫：快速切换会话时旧会话 loadTail 晚到不得覆盖当前会话聊天区——缓存本身仍按
-          // 会话累积（切回时 force 重渲染），此处只阻止非当前会话的渲染写入显示。
+          // 2026-09-07 修复（M1）：迟到请求守卫——快速切换会话时旧会话 loadTail 晚到会覆盖当前会话聊天区。
+          // 缓存本身仍按会话累积（切回时 force 重渲染），此处只阻止非当前会话的渲染写入显示。
           if (sessionId !== stateRef.current.currentId) return;
           const events = [...c.bySeq.values()].sort((a, b) => a.seq - b.seq);
           const msgs = collectMessages(events, consistencyMapRef.current);
-          // 乐观用户消息先于 AI 流式回复渲染：用户刚发的消息（发送中…）是 AI 回复的前提，
-          // 服务端回显延迟时不能让"你（发送中…）"排到 AI 气泡之下（时序倒挂）。
+          // 2026-09-07 修复（M5）：乐观用户消息先于 AI 流式回复渲染——用户刚发的消息（发送中…）
+          // 是 AI 回复的前提，服务端回显延迟时不能让"你（发送中…）"排到 AI 气泡之下（时序倒挂）。
           const opts = optimisticRef.current.filter((o) => o.sid === sessionId);
           if (opts.length > 0) {
-            // 轮询模式（流式关闭）下真实 user/message 由 loadTail 落入缓存，乐观占位若仍渲染会
-            // 同一条消息双份显示——渲染前按文本去重：缓存已含同文本真实消息 → 跳过占位。
+            // 2026-09-07 修复（H1）：轮询模式（流式关闭）下真实 user/message 由 loadTail 落入缓存，
+            // 乐观占位若仍渲染会同一条消息双份显示。渲染前按文本去重：缓存已含同文本真实消息 → 跳过占位。
             const realUserTexts = msgs.filter((m) => m.role === 'user').map((m) => m.text).filter(Boolean);
             for (const o of opts) {
               const dup = realUserTexts.some((t) => o.text === t || o.text.startsWith(t) || t.startsWith(o.text));
@@ -734,8 +738,8 @@ window.__ModuleLoader__.load({
           }
           const fl = inFlightRef.current;
           if (fl && fl.turn !== undefined && sessionId === stateRef.current.currentId) {
-            // 轮询兜底落库后若缓存已含同 turn/step 的完整 assistant/message（断流漏帧场景），
-            // in-flight 半成品不再渲染并清除，防"半成品气泡+最终消息"并存。
+            // 2026-09-07 修复（M3）：轮询兜底落库后若缓存已含同 turn/step 的完整 assistant/message
+            // （断流漏帧场景），in-flight 半成品不再渲染并清除，防"半成品气泡+最终消息"并存。
             const settled = events.some((ev0) => {
               const d = ev0?.event?.data ?? ev0?.data ?? {};
               return ev0?.event?.type === 'assistant/message' && d.turn === fl.turn && d.step === fl.step;
@@ -753,8 +757,8 @@ window.__ModuleLoader__.load({
         /** 拉取一页历史并合并进会话缓存。无 beforeSeq=尾部最新页；有 beforeSeq=更早一页（向上翻历史）。
          *  force=true：无论是否有新事件都重新渲染（openSession/刷新等"已清空显示"后的调用必须 force，
          *  否则缓存已完整时无新事件 → 渲染被跳过 → 历史消失）。
-         *  probeOnly=true（仅轮询兜底使用）：先拉尾部 1 条探测最新 seq，无新增则跳过全量拉取
-         *  （尾部 100 条全量 ≈1.85MB/次，探测 ≈17KB/次，mux 流式正常时每次轮询都命中跳过）；
+         *  probeOnly=true（2026-09-02 性能优化，仅轮询兜底使用）：先拉尾部 1 条探测最新 seq，
+         *  无新增则跳过全量拉取——尾部 100 条 ≈1.85MB/次降为探测 ≈17KB/次（mux 流式正常时每次轮询都命中跳过）；
          *  探测只判断"有无新事件"，不更新 hasMore（避免污染向上翻页状态）。 */
         const loadTail = useCallback(async (sessionId, opts = {}) => {
           if (!sessionId) return;
@@ -810,14 +814,14 @@ window.__ModuleLoader__.load({
           const r = await api('session.models', { sessionId });
           if (r && r.ok) setModel(r.value?.current?.model ?? '');
         }, []);
-        // ============ 权限预设 + 审批（仿 DSH 本体 composer） ============
+        // ============ 权限预设 + 审批（2026-09-04，仿 DSH 本体 composer） ============
         /** 当前会话权限预设展示名（按 value 覆盖，其余回退 host name）。 */
         const PRESET_NAMES = { 'read-only': '只读', 'workspace-write': '工作区读写', 'danger-full-access': '完全访问 (Full access)' };
         const permNameOf = (v, fallback) => PRESET_NAMES[v] ?? fallback ?? String(v ?? '');
         /** 拉取某会话的权限预设状态（读 host ctx.permissionPresets 折叠）。 */
         const loadPerm = useCallback(async (sessionId) => {
           const r = await rpc('permission.state', { sessionId });
-          // 快速切换会话时旧响应不得覆盖新会话的权限预设（按响应 sessionId 校验）
+          // 2026-09-07 修复（M2）：快速切换会话时旧响应不得覆盖新会话的权限预设（按响应 sessionId 校验）
           if (r && r.ok && r.value && r.value.available === true && String(r.value.sessionId ?? '') === sessionId) setPerm(r.value);
           else if (r && r.ok && r.value && r.value.available === false) setPerm(null);
         }, []);
@@ -887,15 +891,15 @@ window.__ModuleLoader__.load({
           ));
         };
 
-        // ============ 流式输出：/api/events.mux SSE 实时事件 ============
+        // ============ 流式输出（2026-08-30）：/api/events.mux SSE 实时事件 ============
         // 与 DSH 本体同源：打开流即收到全部会话的 session/subscribed（尾部 seq）+ 实时 session/event；
         // assistant/chunk 增量累积为 inFlight 条目（思考/回答逐字出现，思考区默认折叠、展开可见增长）。
         const handleMuxFrame = useCallback((raw) => {
           // WebSocket 消息是 server-request 信封 {type, rpcId, method, payload}，payload 才是 muxFrame
           const f = (raw && typeof raw === 'object' && raw.payload && typeof raw.payload === 'object') ? raw.payload : raw;
           if (!f || typeof f !== 'object') return;
-          // 审批帧（与 DSH 本体同源，随 events.mux 广播）：approval/requested 进待审批列表
-          // （渲染在输入区上方），approval/resolved 移除；审批在"轮询模式"下也保持实时。
+          // 2026-09-04 审批帧（与 DSH 本体同源，随 events.mux 广播）：approval/requested 进待审批
+          // 列表（渲染在输入区上方），approval/resolved 移除；审批在"轮询模式"下也保持实时。
           const envRpcId = (raw && typeof raw === 'object' && typeof raw.rpcId === 'string') ? raw.rpcId : undefined;
           if (f.type === 'approval/requested') {
             if (typeof f.approvalId !== 'string' || typeof f.sessionId !== 'string' || !envRpcId) return;
@@ -908,9 +912,9 @@ window.__ModuleLoader__.load({
             setPendingApprovals((prev) => prev.filter((a) => !(a.approvalId === f.approvalId && a.sessionId === f.sessionId)));
             return;
           }
-          // 乐观占位清理必须与流式开关无关：轮询模式（流式关闭）下真实 user/message 帧若被下方
-          // streaming gate 拦下，占位会清不掉 → 与 loadTail 落库的真实消息双份显示 + 恒显"发送中…"。
-          // 此处先于 gate 完成两模式共用的清理（渲染层另有去重兜底）。
+          // 2026-09-07 修复（H1）：乐观占位清理必须与流式开关无关——轮询模式（流式关闭）下
+          // 真实 user/message 帧若被下方 streaming gate 拦下，占位永远清不掉 → 与 loadTail 落库的
+          // 真实消息双份显示 + 恒显"发送中…"。此处先于 gate 完成两模式共用的清理（渲染层另有去重兜底）。
           if (f.type === 'session/event') {
             const sid = String(f.sessionId ?? '');
             const ev = f.event;
@@ -970,8 +974,8 @@ window.__ModuleLoader__.load({
             }
           }
         }, []);
-        /** 建立/维持 /api/events.mux WebSocket 流（与流式开关解耦：审批帧需要常驻通道，
-         *  流式关闭时仍保持连接，仅"聊天渲染"回退轮询；断开 3s 自动重连）。
+        /** 建立/维持 /api/events.mux WebSocket 流（与流式开关解耦：2026-09-04 起审批帧需要
+         *  常驻通道，流式关闭时仍保持连接，仅"聊天渲染"回退轮询；断开 3s 自动重连）。
          *  与 DSH 本体同源：浏览器端 mux 是 WebSocket 下行（非 SSE fetch），消息=server-request 信封 JSON。 */
         const ensureStream = useCallback(() => {
           if (streamAbortRef.current || typeof location === 'undefined') return;
@@ -980,8 +984,8 @@ window.__ModuleLoader__.load({
           let retryTimer = null;
           const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/events.mux`;
           const stop = () => {
-            // 卸载/中止时同时清掉已排期的 3s 重连定时器，否则插件停用后 setTimeout 仍会触发
-            // ensureStream → 后台空转重建 WebSocket。
+            // 2026-09-07 修复（低危）：卸载/中止时同时清掉已排期的 3s 重连定时器，
+            // 否则插件停用后 setTimeout 仍触发 ensureStream → 后台空转重建 WebSocket。
             if (retryTimer !== null) { try { clearTimeout(retryTimer); } catch { /* ignore */ } retryTimer = null; }
             if (ws) { try { ws.onmessage = null; ws.onclose = null; ws.onerror = null; ws.close(); } catch { /* ignore */ } }
             ws = null;
@@ -1017,38 +1021,39 @@ window.__ModuleLoader__.load({
           showToast(next ? '已开启流式输出（思考/回答实时显示）' : '已关闭流式输出（消息按轮询刷新，审批仍实时）');
         };
 
-        // 自动滚动到底（长会话时新消息不再落在视口外）；仅在用户位于底部附近时跟随滚动
+        // 自动滚动到底（2026-08-30：长会话时新消息不再落在视口外）；
+        // 2026-08-30 修复"翻阅历史被拉回底部"：仅在用户位于底部附近时跟随滚动
         useEffect(() => {
           const el = chatRef.current;
           if (el && stickRef.current) el.scrollTop = el.scrollHeight;
         }, [messages, page]);
 
-        // 打开功能页总在顶部：主区内容滚动容器由 chat 与功能页两分支复用同一 DOM 节点
-        // （同类型 div、无 key），切换时 scrollTop 会残留——聊天停在底部或上一功能页翻到
-        // 中部时，新打开的思维循环等页会落在中途/底部。每次进入功能页都把内容区回到顶部
-        // （useLayoutEffect 在绘制前清零，无闪帧）；chat 页滚动由既有 stickRef/自动滚底逻辑
-        // 管理（返回会话时强制从底部开始），不受影响。
+        // 2026-09-04-1 修复"打开功能页总不在顶部"：主区内容滚动容器由 chat 与功能页两分支
+        // 复用同一 DOM 节点（同类型 div、无 key），切换时 scrollTop 会残留——聊天停在底部或
+        // 上一功能页翻到中部时，新打开的思维循环等页就落在中途/底部。
+        // 修复：每次进入功能页都把内容区回到顶部（useLayoutEffect 在绘制前清零，无闪帧）；
+        // chat 页滚动由既有 stickRef/自动滚底逻辑管理（返回会话时强制从底部开始），不受影响。
         useLayoutEffect(() => {
           if (page === 'chat') return;
           const el = pageRef.current;
           if (el) el.scrollTop = 0;
         }, [page]);
 
-        // 轮询刷新：页面可见 3s 一次，隐藏（切后台/挂起）降频 30s——省电不丢消息；
+        // 轮询刷新（2026-08-30 优化）：页面可见 3s 一次，隐藏（切后台/挂起）降频 30s——省电不丢消息；
         // 流式开启时 SSE 已实时覆盖，轮询降频 10s 仅作兜底（断流/漏帧由下一次拉取补齐）；
         // 切回前台（visibilitychange）立即刷新一次。初始化：读取流式开关并启动 SSE。
         useEffect(() => {
           void refreshSidebar();
           void loadTail(stateRef.current.currentId, { force: true }); // 初始化：强制渲染缓存
           void refreshModel(stateRef.current.currentId);
-          void loadPerm(stateRef.current.currentId); // 初始化权限预设（主会话）
+          void loadPerm(stateRef.current.currentId); // 2026-09-04：初始化权限预设（主会话）
           (async () => {
             const r = await rpc('ui.settings.get');
             if (r.ok && r.value && typeof r.value.streaming === 'boolean') {
               streamingRef.current = r.value.streaming;
               setStreaming(r.value.streaming);
             }
-            // mux 常驻（审批帧实时），不随流式开关启停——仅聊天渲染由 streamingRef 控制
+            // 2026-09-04：mux 常驻（审批帧实时），不随流式开关启停——仅聊天渲染由 streamingRef 控制
             ensureStream();
           })();
           let alive = true;
@@ -1056,9 +1061,9 @@ window.__ModuleLoader__.load({
           const tick = async () => {
             if (!alive) return;
             await refreshSidebar();
-            await loadTail(stateRef.current.currentId, { probeOnly: true }); // 探测增量，无新增不拉全量
+            await loadTail(stateRef.current.currentId, { probeOnly: true }); // 2026-09-02：探测增量，无新增不拉全量（1.85MB→17KB）
             await refreshModel(stateRef.current.currentId);
-            // 人格一致性渲染层映射（15s 节流拉取，本地服务开销极低）
+            // 2026-08-31 人格一致性渲染层映射（15s 节流拉取，本地服务开销极低）
             if (Date.now() - lastConsistencyPullRef.current > 15000) {
               lastConsistencyPullRef.current = Date.now();
               const cr = await rpc('consistency.revisions');
@@ -1096,20 +1101,20 @@ window.__ModuleLoader__.load({
           setCurrentId(id);
           setPage('chat');
           setMessages([]);
-          markReplying(false); // 切会话清"回复中"并撤掉旧 60s 兜底 timer
+          markReplying(false); // 2026-09-07（L7）：切会话清"回复中"并撤掉旧 60s 兜底 timer
           inFlightRef.current = null; // 切换会话：流式增量按会话隔离
           stickRef.current = true; // 切换会话后从底部开始
           setPermOpen(false);
-          // 待审批保留（approval/resolved 帧到达时自行移除）；渲染时按当前/主会话过滤
+          // 2026-09-04：待审批保留（approval/resolved 帧到达时自行移除）；渲染时按当前/主会话过滤
           await loadTail(id, { force: true }); // force：已清空显示，必须重渲染（缓存无新事件时也不例外）
           await refreshModel(id);
-          void loadPerm(id); // 会话级权限预设（permission 逐会话独立）
+          void loadPerm(id); // 2026-09-04：会话级权限预设（permission 逐会话独立）
         };
         // 新建会话（选择工作区/指定文件夹）：原生 session.create({workspaceId}) → 打开新会话并刷新侧栏
         const createSession = async (workspaceId) => {
           try {
             let wsId = workspaceId || newWsId;
-            // 弹窗未选择/未填路径时，默认用第一个工作区（与弹窗 select 显示一致）
+            // 弹窗未选择/未填路径时，默认用第一个工作区（与弹窗 select 显示一致，2026-08-30 修复"请选择工作区"）
             if (!wsId && !newWsPath.trim() && Array.isArray(workspaces) && workspaces.length > 0) wsId = workspaces[0].workspaceId;
             // 未选现有工作区但填了路径 → 先用原生 workspace.create 把目录建为新工作区（支持项目外路径）
             if (!wsId && newWsPath.trim()) {
@@ -1126,8 +1131,8 @@ window.__ModuleLoader__.load({
             if (r && r.ok && r.value?.sessionId) {
               const sid = r.value.sessionId;
               newlyCreatedRef.current[sid] = Date.now();
-              // session.create（connection/api-gateway 通道）创建后不 attach 工作区，
-              // 由 Host 侧补 attach（workspaceRegistry），否则侧栏看不到新会话
+              // 2026-08-30 修复：session.create（connection/api-gateway 通道）创建后不 attach 工作区，
+              // 由 Host 侧补 attach（workspaceRegistry），否则侧栏永远看不到新会话
               const at = await rpc('workspace.attach', { workspaceId: wsId, sessionId: sid });
               if (!at.ok) showToast(`会话已创建，但挂载工作区失败：${at.error}`);
               // 强制展开所属工作区——若用户折叠过工作区，新建后不展开就看不到会话行
@@ -1137,7 +1142,7 @@ window.__ModuleLoader__.load({
               setNewWsPath('');
               await refreshSidebar();
               await openSession(sid);
-              await refreshSidebar(); // 再次刷新，确保新会话出现在侧栏
+              await refreshSidebar(); // 再次刷新，确保新会话出现在侧栏（2026-08-30）
             } else {
               showToast(`创建失败：${(r && r.error) || '未知错误'}`);
             }
@@ -1145,9 +1150,10 @@ window.__ModuleLoader__.load({
             showToast(`创建会话异常：${String(error?.message || error)}`);
           }
         };
-        // 工作区目录选择：native 能力走宿主系统文件夹对话框（Windows IFileOpenDialog），
-        // 选中路径后走 workspace.create 建新工作区；无系统对话框的环境（Linux/proot）能力为
-        // browse——先探测 capability，native 走系统对话框，browse 打开自绘目录浏览弹窗。
+        // 2026-08-30 迭代：类似 DSH 原生的工作区目录选择——调用宿主 native 目录选择器
+        // （Windows 系统文件夹对话框 IFileOpenDialog），选中路径后走 workspace.create 建新工作区。
+        // 2026-09-02 手机端修复：无系统对话框的环境（Linux/proot）能力为 browse——
+        // 先探测 capability，native 走系统对话框，browse 打开自绘目录浏览弹窗。
         const pickDirectory = async () => {
           if (pickingDir) return;
           setPickingDir(true);
@@ -1179,8 +1185,9 @@ window.__ModuleLoader__.load({
           const finalText = [t, ...imgRefs].filter(Boolean).join('\n').trim();
           if (!finalText || !stateRef.current.currentId) return false;
           const sid = stateRef.current.currentId;
-          // 点击发送即刻上屏：乐观占位在第一个 await 之前同步插入，上屏不等待 session.prompt
-          // 的服务端处理（唤醒/入队/忙时排队时延不定）。checkReady / session.prompt 其后异步投递：
+          // 2026-09-07 UX 修复：点击发送即刻上屏——乐观占位改为在第一个 await 之前同步插入，
+          // 上屏不再等待 session.prompt 的服务端处理（唤醒/入队/忙时排队时延不定，曾导致消息
+          // 时快时慢地延迟出现）。checkReady / session.prompt 改为其后异步投递：
           //  - 成功：占位保留，待真实 user/message 事件（mux 或轮询落库）按文本匹配替换（渲染层有去重兜底）；
           //  - 任一环节失败：按本条 uid 移除占位并提示（输入框内容由调用方保留，可直接重发）。
           stickRef.current = true; // 发送后跟随滚动到底
@@ -1194,7 +1201,7 @@ window.__ModuleLoader__.load({
             optimisticRef.current = optimisticRef.current.filter((o) => o.uid !== uid);
             renderChatRef.current?.(sid);
           };
-          // 未配置模型提供商拦截：直接不发送并提示（避免发送后静默无回应）。
+          // 2026-08-30：未配置模型提供商拦截——直接不发送并提示（避免发送后静默无回应）。
           // 仅当 Host 明确判定未配置（ok && configured===false）才拦截；RPC 自身异常/服务不可用时放行，
           // 让 session.prompt 正常报错，避免误拦截导致消息永远发不出去。
           const ready = await rpc('models.checkReady', {});
@@ -1202,31 +1209,31 @@ window.__ModuleLoader__.load({
             dropOptimistic();
             setPasteImgs([]);
             showToast('未配置模型提供商：请先在「模型」页配置 DeepSeek 密钥或自定义提供商后再发送');
-            return false; // 返回未投递：输入框内容保留，用户配好密钥可直接重发
+            return false; // 2026-09-07 修复（L6）：返回未投递——输入框内容保留，用户配好密钥可直接重发
           }
           const r = await api('session.prompt', { sessionId: sid, mode: 'queue', content: [{ type: 'text', text: finalText }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
           if (r && r.ok) {
             setPasteImgs([]);
-            // 乐观上屏：占位已在上方（不等 RPC）插入；这里不再移除占位，
+            // 2026-08-30：乐观上屏——占位已在上方（不等 RPC）插入；这里不再移除占位，
             // 真实 user/message 事件到达后按文本匹配移除占位条目（渲染层另有去重兜底）。
             showToast(imgRefs.length > 0 ? '已发送（含图片，AI 将自动识别）' : '已发送，AI 回复中…');
-            markReplying(true); // 内部按"最后活动 +60s 无信号"计时，多次发送不叠加旧 timer
+            markReplying(true); // 2026-09-07（L7）：内部按"最后活动 +60s 无信号"计时，多次发送不叠加旧 timer
             // 兜底：SSE 未开/断流时按轮询补齐（探测增量，无新增则跳过）
             setTimeout(() => { void loadTail(sid, { probeOnly: true }); }, 900);
             return true; // 已投递 → 调用方清空输入
           }
           dropOptimistic();
           showToast(`发送失败：${(r && r.error) || ''}`);
-          return false; // 失败也保留输入，避免误清空待重发内容
+          return false; // 2026-09-07（L6）：失败也保留输入，避免误清空待重发内容
         };
-        // 停止生成：仿 DSH 原生停止——原生 API session.cancel
+        // 停止生成（2026-08-30：仿 DSH 原生停止——原生 API session.cancel）
         const stopGenerate = async () => {
           if (!stateRef.current.currentId) return;
           const r = await api('session.cancel', { sessionId: stateRef.current.currentId });
           if (r && r.ok) { markReplying(false); inFlightRef.current = null; showToast('已停止生成'); setTimeout(() => { void loadTail(stateRef.current.currentId, { force: true }); }, 600); }
           else showToast(`停止失败：${(r && r.error) || ''}`);
         };
-        // 上传图片（describe-image attach 通道）：加入"待发送"预览条，随消息一起发送，AI 收到引用后自行调 describe_image 识图
+        // 上传图片（describe-image attach 通道；2026-08-30：加入"待发送"预览条，随消息一起发送，AI 收到引用后自行调 describe_image 识图）
         const uploadImage = async (file) => {
           if (!file) return;
           if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) { showToast('仅支持 PNG/JPEG/GIF/WebP'); return; }
@@ -1258,7 +1265,7 @@ window.__ModuleLoader__.load({
             showToast(`上传失败：${String(err?.message || err)}`);
           } finally { setUploading(false); }
         };
-        // 粘贴图片到输入框：剪贴板图片直接进入待发送预览条
+        // 粘贴图片到输入框（2026-08-30：剪贴板图片直接进入待发送预览条）
         const onPaste = (ev) => {
           const files = ev.clipboardData?.files;
           if (!files || files.length === 0) return;
@@ -1282,7 +1289,7 @@ window.__ModuleLoader__.load({
             } else showToast(`删除失败：${r.error}`);
           });
         };
-        // 重命名会话：原生 session.rename
+        // 重命名会话（2026-08-30：原生 session.rename）
         const renameSession = (sid) => {
           const title = sid === MAIN_SESSION_ID ? '主会话' : (sessions.find((s) => s.sessionId === sid)?.projections?.values?.title || '');
           setRenaming({ id: sid, title: String(title) });
@@ -1306,8 +1313,8 @@ window.__ModuleLoader__.load({
           try {
             const r = await Promise.race([
               rpc('system.shutdown', {}),
-              // Host 关闭前若备份进行中会等待最长 60s——超时设 65s 与 Host 最大等待一致，
-              // 避免把"正常关闭中"误报为失败
+              // 2026-08-31 审计修复：Host 关闭前若备份进行中会等待最长 60s——2.5s 超时会把
+              // "正常关闭中"误报为失败；提到 65s 与 Host 最大等待一致
               new Promise((res) => setTimeout(() => res({ ok: false, error: '超时（服务未响应）' }), 65000)),
             ]);
             if (!r || !r.ok) { failed = true; showToast(`关闭失败：${(r && r.error) || '未知错误'}`); }
@@ -1358,7 +1365,7 @@ window.__ModuleLoader__.load({
                 workspaces.map((w) => {
                   const open = wsExpanded[w.workspaceId] !== false;
                   // 仿 DSH 原生：空白会话（未对话）仅当前选中时显示，切走即自动从栏中清除；
-                  // 例外：最近新建的会话（60s 内）始终显示，避免新建后看不到
+                  // 例外：最近新建的会话（60s 内）始终显示，避免新建后看不到（2026-08-30）
                   const wsSessions = (w.sessionIds ?? []).filter((sid) => {
                     if (sid === MAIN_SESSION_ID) return false;
                     const it = sessions.find((s) => s.sessionId === sid);
@@ -1462,13 +1469,13 @@ window.__ModuleLoader__.load({
                   page === 'vision' ? e(PageVision, { rpc, showToast }) :
                   page === 'report' ? e(PageReport, { rpc, showToast }) : null),
             page === 'chat' && [
-              // 审批卡（当前会话 + 主会话待审批；仅当有请求时显示）
+              // 2026-09-04 审批卡（当前会话 + 主会话待审批；仅当有请求时显示）
               (() => {
                 const pend = pendingApprovals.filter((a) => a.sessionId === stateRef.current.currentId || a.sessionId === MAIN_SESSION_ID);
                 const cards = approvalCardsOf(pend);
                 return cards ? e('div', { key: 'aprv', className: 'arc-aprv-wrap' }, cards) : null;
               })(),
-              // 权限预设选择（仿 DSH 本体 composer 的访问模式；仅会话可用时显示）
+              // 2026-09-04 权限预设选择（仿 DSH 本体 composer 的访问模式；仅会话可用时显示）
               (perm && perm.available === true
                 ? e('div', { key: 'permrow', className: 'arc-perm-row' },
                     e('span', { className: 'lbl' }, '访问模式'),
@@ -1522,7 +1529,7 @@ window.__ModuleLoader__.load({
             e(LedgerDock, { showToast }),
           ),
           toast ? e('div', { className: 'arc-toast' }, toast) : null,
-          // 功能页（非聊天）悬浮审批卡：主会话的主动/定时任务也可能触发审批
+          // 2026-09-04：功能页（非聊天）悬浮审批卡——主会话的主动/定时任务也可能触发审批
           (page !== 'chat' && (() => {
             const pend = pendingApprovals.filter((a) => a.sessionId === MAIN_SESSION_ID);
             const cards = approvalCardsOf(pend);
@@ -1561,7 +1568,7 @@ window.__ModuleLoader__.load({
         );
       }
 
-      // ================= 目录浏览弹窗（browse 能力）=================
+      // ================= 目录浏览弹窗（browse 能力，2026-09-02 手机端修复）=================
       function BrowseModal({ rpc, showToast, onPick, onClose }) {
         const [path, setPath] = useState('');
         const [crumbs, setCrumbs] = useState([]);
@@ -1631,16 +1638,18 @@ window.__ModuleLoader__.load({
         const [dnd, setDnd] = useState(false);
         const [consistency, setConsistency] = useState(null);
         const [importing, setImporting] = useState('');
-        // 一键更新
+        // 一键更新（方案 D，2026-09-02）
         const [upd, setUpd] = useState(null);
         const [checkingUpd, setCheckingUpd] = useState(false);
         const [applyingUpd, setApplyingUpd] = useState(false);
         const load = useCallback(async () => {
           setBusy(true);
-          // 总控加载策略：overview 是纯本地聚合（loop/memory/evolution/schedule/notify 内存快照，
-          // 毫秒级）→ 先行 await 并立即渲染骨架/概览；其余 RPC（backup.list 目录遍历、
-          // system.tokenUsage 等耗时项）改为逐项后台并行补更，各自就绪即刷新对应卡片——
-          // 最慢项不再决定"总控加载中…"的时长。
+          // 2026-09-02 性能优化：updater.check 含 git 网络操作（fetch/ls-remote，实测 4.7s、差网超时 75s），
+          // 从 Promise.all 拆出异步补更——"总控"页骨架不被网络操作拖住。
+          // 2026-09-03 阶段1（手机端 15s+ 修复）：overview 是纯本地聚合（loop/memory/evolution/schedule/notify
+          // 内存快照，毫秒级）→ 先行 await 并立即 setData，页面骨架/概览即刻可见；其余 6 个 RPC
+          // （backup.list 目录遍历、system.tokenUsage 自调 /api/session.list 等曾可拖数秒）改为逐项
+          // 后台并行补更，各自就绪即刷新对应卡片——最慢项不再决定"总控加载中…"的时长。
           const r = await rpc('overview');
           setData(r.ok ? r.value : null);
           if (!r.ok) showToast(`总控加载失败：${r.error}`);
@@ -1687,14 +1696,14 @@ window.__ModuleLoader__.load({
           if (r.ok) { setAutostart(r.value); showToast(next ? '已关闭开机自启' : '已开启开机自启（登录后自动运行）'); }
           else showToast(`操作失败：${r.error}`);
         };
-        // 降频模式：用户自行决定是否把自循环兜底降到 30 分钟；不再自动依赖用户状态
+        // 降频模式（2026-08-30）：用户自行决定是否把自循环兜底降到 30 分钟；不再自动依赖用户状态
         const toggleReduced = async () => {
           const cur = data?.loop?.stats?.config?.reducedMode === true;
           const r = await rpc('loop.configure', { reducedMode: !cur });
           if (r.ok) { showToast(!cur ? '降频模式已开启（兜底 30 分钟）' : '降频模式已关闭（兜底恢复默认）'); await load(); }
           else showToast(`操作失败：${r.error}`);
         };
-        // 双 Agent：记忆加工（agent1 概括 recent/语义）+ 输出前审查（agent2 决策后）
+        // 双 Agent（2026-09-03-9）：记忆加工（agent1 概括 recent/语义）+ 输出前审查（agent2 决策后）
         const toggleDual = async () => {
           const cur = data?.loop?.stats?.config?.dualAgent === true;
           const r = await rpc('loop.configure', { dualAgent: !cur });
@@ -1707,14 +1716,14 @@ window.__ModuleLoader__.load({
           if (r.ok) { setDnd(next); showToast(next ? '勿扰模式已开启（通知仍弹窗，仅不响提示音）' : '勿扰模式已关闭'); }
           else showToast(`操作失败：${r.error}`);
         };
-        // 人格一致性总控开关：settings/持久化状态经 consistency.configure 即时生效
+        // 人格一致性总控开关（2026-08-31）：settings/持久化状态经 consistency.configure 即时生效
         const toggleConsistency = async () => {
           const next = !(consistency?.enabled === true);
           const r = await rpc('consistency.configure', { enabled: next });
           if (r.ok) { setConsistency(r.value); showToast(next ? '人格一致性已开启' : '人格一致性已关闭'); }
           else showToast(`操作失败：${r.error}`);
         };
-        // 一键更新；force=true 绕过服务端 60s 缓存实时复查
+        // 一键更新（方案 D，2026-09-02）；force=true 绕过服务端 60s 缓存实时复查
         const doCheckUpdate = async () => {
           setCheckingUpd(true);
           const r = await rpc('updater.check', { force: true });
@@ -1846,7 +1855,7 @@ window.__ModuleLoader__.load({
         const [newSection, setNewSection] = useState('traits');
         const [newContent, setNewContent] = useState('');
         const [newImportance, setNewImportance] = useState('0.5');
-        // 一键凝练（LLM 无损整理）：distilling=生成中；distill=预览结果；applying=写入中
+        // 2026-09-08 一键凝练（LLM 无损整理）：distilling=生成中；distill=预览结果；applying=写入中
         const [distilling, setDistilling] = useState(false);
         const [distill, setDistill] = useState(null);
         const [distillErr, setDistillErr] = useState('');
@@ -1887,7 +1896,7 @@ window.__ModuleLoader__.load({
         };
 
         const sections = data?.sections ?? {};
-        // ===== 一键凝练（LLM 无损整理全量人格条目） =====
+        // ===== 2026-09-08 一键凝练（LLM 无损整理全量人格条目） =====
         const sectionLabel = (sid) => (PERSONA_SECTIONS.find(([x]) => x === sid) ?? [sid, sid])[1];
         // 原条目 id → {section, content}（预览里展示"本条合并了哪些原文"）
         const distillOrigin = {};
@@ -2034,14 +2043,14 @@ window.__ModuleLoader__.load({
       }
 
       // ================= 思维循环 =================
-      // 前置思考参数编辑范围（与 modules/loop/lib/index.js 的 PRE_TURN_* 常量保持一致；
+      // 2026-09-03-5：前置思考参数编辑范围（与 modules/loop/lib/index.js 的 PRE_TURN_* 常量保持一致；
       // 上限防"乱填超大值"：JS setTimeout 超 2^31-1ms 会溢出成 ~1ms 立即触发、每个回合的 pre-turn 全被砍）
       const PRE_CAP_MIN = 5000;
       const PRE_CAP_MAX = 600000;
       const PRE_TOK_MIN = 500;
       const PRE_TOK_MAX = 60000;
       // ================= 思维预设 =================
-      // 用户指令注入（决策/审查/对话自检），适配双 Agent。
+      // 2026-09-04-2：用户指令注入（决策/审查/对话自检），适配双 Agent。
       // 名称刻意自拟，不借用其他产品的功能名。零配置=零注入零变化。
       function InstrPanel({ rpc, showToast, askConfirm }) {
         const [data, setData] = useState(null); // {presets, activePresetId, entries, injectCapChars}
@@ -2274,13 +2283,13 @@ window.__ModuleLoader__.load({
         const [state, setState] = useState(null);
         const [busy, setBusy] = useState(false);
         const [intervalMs, setIntervalMs] = useState('');
-        // 单次决策 token 预算编辑栏（推理模型 reasoning 会占用，默认 10000）
+        // 2026-09-01-4：单次决策 token 预算编辑栏（推理模型 reasoning 会占用，默认 10000）
         const [maxTokens, setMaxTokens] = useState('');
         const [tab, setTab] = useState('status');
         const [history, setHistory] = useState(null);
-        const [mode, setMode] = useState('idle'); // 活动流"思考进行中"占位
-        const [preCap, setPreCap] = useState(''); // 对话前置思考时限（ms）编辑值
-        const [preTok, setPreTok] = useState(''); // 对话前置思考单次预算编辑值
+        const [mode, setMode] = useState('idle'); // 2026-09-03-3：活动流"思考进行中"占位
+        const [preCap, setPreCap] = useState(''); // 2026-09-03-5：对话前置思考时限（ms）编辑值
+        const [preTok, setPreTok] = useState(''); // 2026-09-03-5：对话前置思考单次预算编辑值
 
         const load = useCallback(async () => {
           setBusy(true);
@@ -2292,12 +2301,12 @@ window.__ModuleLoader__.load({
         const loadHistory = useCallback(async () => {
           const r = await rpc('loop.history', { limit: 60 });
           if (r.ok) setHistory(Array.isArray(r.value?.items) ? r.value.items : []);
-          // 顺带取运行状态：思考进行中时活动流顶部显示占位（决策完成前即"可见"）
+          // 2026-09-03-3：顺带取运行状态——思考进行中时活动流顶部显示占位（决策完成前即"可见"）
           const s = await rpc('loop.stats');
           if (s.ok && s.value?.mode) setMode(s.value.mode);
         }, [rpc]);
         useEffect(() => { void load(); }, [load]);
-        // 活动流打开时每 5s 自动刷新：对话的前置思考（pre-turn）实时可见，无需手动点刷新
+        // 2026-09-03-3：活动流打开时每 5s 自动刷新——对话的前置思考（pre-turn）实时可见，不再需要手动点刷新
         useEffect(() => {
           if (tab !== 'history') return undefined;
           void loadHistory();
@@ -2310,7 +2319,7 @@ window.__ModuleLoader__.load({
           if (!Number.isFinite(v) || v < 1000) { showToast('兜底间隔必须 ≥ 1000ms'); return; }
           const mt = Number(maxTokens);
           if (maxTokens.trim() !== '' && (!Number.isFinite(mt) || mt < 1)) { showToast('maxTokens 必须 ≥ 1'); return; }
-          // 前置思考参数双层校验（前端拦截 + Host configure 权威范围，见 PRE_* 常量）
+          // 2026-09-03-5：前置思考参数双层校验（前端拦截 + Host configure 权威范围，见 PRE_* 常量）
           const pc = Number(preCap);
           if (preCap.trim() !== '' && (!Number.isFinite(pc) || pc < PRE_CAP_MIN || pc > PRE_CAP_MAX)) { showToast(`对话前置思考时限必须在 ${PRE_CAP_MIN / 1000} 秒 ~ ${PRE_CAP_MAX / 60000} 分钟之间`); return; }
           const pt = Number(preTok);
@@ -2325,7 +2334,7 @@ window.__ModuleLoader__.load({
             void load();
           } else showToast(`配置失败：${r.error}`);
         };
-        // 双 Agent 即时切换（持久化，无需重启）
+        // 2026-09-03-9：双 Agent 即时切换（持久化，无需重启）
         const toggleDualLoop = async () => {
           const next = !(stats?.config?.dualAgent === true);
           const r = await rpc('loop.configure', { dualAgent: next });
@@ -2375,9 +2384,9 @@ window.__ModuleLoader__.load({
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: preCap, onChange: (ev) => setPreCap(ev.target.value), placeholder: `如 120000（120 秒；限 ${PRE_CAP_MIN / 1000} 秒 ~ ${PRE_CAP_MAX / 60000} 分钟，乱填超大值会致每回合思考瞬间被砍）` }),
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: preTok, onChange: (ev) => setPreTok(ev.target.value), placeholder: `如 4000（越小完成越快；限 ${PRE_TOK_MIN} ~ ${PRE_TOK_MAX}）` }),
               e('p', { className: 'arc-hint' }, '兜底间隔：无事件时多久强制思考一轮；maxTokens：时间驱动决策预算；对话前置思考时限：每次对话消息的前置思考最晚多久完成（超时中止并在活动流留痕）；对话前置思考预算：该思考单次 token 上限（4000 完成较快；改大更深入但更慢）。tick/模型等需改 cordis.patch.yml 后重启。')),
-            e(Card, { key: 'slp', title: '😴 睡眠/清醒期' },
+            e(Card, { key: 'slp', title: '😴 睡眠/清醒期（2026-08-31，语义修正 09-03）' },
               e('p', { className: 'dim' }, state?.sleep?.phase === 'asleep'
-                ? `用户睡眠状态持续 ≥30 分钟后进入睡眠期：思维循环完全暂停（无视降频开关、事件触发也跳过），定时任务照常触发并打断睡眠期。状态 TTL 到期≠醒来——仅用户发消息/状态清除或改标签/任务打断才解除（防夜行长睡眠被连环打扰）。`
+                ? `用户睡眠状态持续 ≥30 分钟后进入睡眠期：思维循环完全暂停（无视降频开关、事件触发也跳过），定时任务照常触发并打断睡眠期。状态 TTL 到期≠醒来——仅用户发消息/状态清除或改标签/任务打断才解除（2026-09-03 修复夜行长睡眠被连环打扰）。`
                 : `用户"睡眠中"状态持续 ≥${Math.round((stats?.config?.sleepEnterDelayMs ?? 1800000) / 60000)} 分钟且未来 ${Math.round((stats?.config?.sleepCheckWindowMs ?? 28800000) / 3600000)} 小时无 pending 任务 → 进入睡眠期（完全暂停主动循环）；解除=真实唤醒信号（用户发消息 / 状态清除或改标签 / 任务触发），状态 TTL 到期保持静默；仅无 TTL 的睡眠行超过 ${Math.round((stats?.config?.sleepMaxMs ?? 28800000) / 3600000)} 小时作为兜底强制解除；解除后进入 ${Math.round((stats?.config?.sleepCooldownMs ?? 10800000) / 3600000)} 小时强制清醒间隔（期间无法再睡眠）。`),
               state?.sleep?.phase === 'asleep'
                 ? e('div', { className: 't2', style: { marginTop: 6 } }, e(Badge, { text: `已睡眠 ${fmtDur(state.sleep.asleepForMs)} · 静默中（等真实唤醒）`, tone: 'dim' }))
@@ -2436,7 +2445,7 @@ window.__ModuleLoader__.load({
         const [busy, setBusy] = useState(false);
         const [editing, setEditing] = useState(null); // {id, content, importance, protected}
         const [qk, setQk] = useState('8');
-        // 多选删除 + 记忆整合
+        // 2026-08-30：多选删除 + 记忆整合
         const [selected, setSelected] = useState([]);
         const [integrating, setIntegrating] = useState(false);
 
@@ -2603,8 +2612,8 @@ window.__ModuleLoader__.load({
         const [stats, setStats] = useState(null);
         const [busy, setBusy] = useState(false);
         const [filter, setFilter] = useState('all');
-        const [tab, setTab] = useState('candidates'); // candidates | history（采纳记录）
-        // 潜意识系统（梦境引擎）：状态 + Phi 模型状态 + 最近草案
+        const [tab, setTab] = useState('candidates'); // candidates | history（2026-08-30 采纳记录）
+        // 2026-08-31 潜意识系统（梦境引擎）：状态 + Phi 模型状态 + 最近草案
         const [sub, setSub] = useState(null);
         const [model, setModel] = useState(null);
         const [subLog, setSubLog] = useState(null);
@@ -2623,8 +2632,8 @@ window.__ModuleLoader__.load({
         useEffect(() => { void load(); }, [load]);
 
         const suggest = () => {
-          // 触发建议是约 2 分钟长 RPC：先给进行中提示，设兜底等待上限，结束后无论成败/超时都强制
-          // 刷新候选列表（候选由服务端落账，刷新即可见），避免页面长时间无反馈。
+          // 2026-09-08 修复：suggest 是约 2 分钟长 RPC——此前服务端完成后若响应丢失/超时，前端不 toast 不刷新，
+          // 候选生成了也看不见（"点了没反应"）。兜底：①15s 进行中提示 ②180s 上限 ③无论成败/超时都强制刷新列表。
           askConfirm('触发一次自进化建议：AI 依据记忆与人格生成候选（不生效），随后逐条隔离评估。', async () => {
             let hint = null;
             try {
@@ -2637,7 +2646,7 @@ window.__ModuleLoader__.load({
               else showToast(`生成失败或超时：${r.error ?? '未知错误'}`);
             } finally {
               if (hint) clearTimeout(hint);
-              void load();
+              void load(); // 成功/失败/超时都强制刷新：候选由服务端落账，刷新即可见
             }
           });
         };
@@ -2661,13 +2670,13 @@ window.__ModuleLoader__.load({
         };
 
         const byStatus = stats?.byStatus ?? {};
-        // 候选状态由最新审批动作记录（approve/reject/rollback/fail/auto-apply）派生——
+        // 2026-08-30 修复：候选状态由最新审批动作记录（approve/reject/rollback/fail/auto-apply）派生——
         // suggest 记录自身的 status 恒为 pending，直接读会令已采纳/已拒绝/已回滚的候选一直显示"待审批"。
         const _allRecs = data?.records ?? [];
         const _statusMap = {};
         for (const r of _allRecs) if (['approve', 'reject', 'rollback', 'fail', 'auto-apply'].includes(r.type)) _statusMap[r.candidateId] = r.status;
-        // 评估（decision/evaluation）是独立 evaluate 记录（按 candidateId 关联），
-        // 不挂在 suggest 行上，按 candidateId 关联后渲染。
+        // 2026-09-07 审计修复：评估（decision/evaluation）是独立 evaluate 记录（按 candidateId 关联），
+        // 不挂在 suggest 行上——此前渲染 c.decision 恒空，"评估"永不显示。
         const _evalMap = {};
         for (const r of _allRecs) if (r.type === 'evaluate' && r.candidateId) _evalMap[r.candidateId] = { decision: r.decision, evaluation: r.evaluation };
         const records = _allRecs.filter((r) => r.type === 'suggest').map((r) => {
@@ -2679,9 +2688,9 @@ window.__ModuleLoader__.load({
           const map = { pending: '待审批', applied: '已采纳', rejected: '已拒绝', 'rolled-back': '已回滚', failed: '失败' };
           return map[r.status ?? 'pending'] ?? r.status ?? 'pending';
         };
-        // 候选类型显示标签（add=新增 / refine=修正既有条目）
+        // 2026-09-02 人格进化拆分：候选类型显示标签（add=新增 / refine=修正既有条目）
         const TYPE_LABEL = { 'persona-add': '人格新增', 'persona-refine': '人格修正', 'skill-create': '技能新建', 'skill-improve': '技能改进' };
-        // 潜意识操作
+        // 2026-08-31 潜意识操作
         const toggleAutoApply = async () => {
           const next = !(sub?.autoApply === true);
           const r = await rpc('subconscious.configure', { autoApply: next });
@@ -2708,7 +2717,7 @@ window.__ModuleLoader__.load({
           setDlBusy(true);
           const r = await rpc('subconscious.modelDownload');
           setDlBusy(false);
-          // 模型管理失败不抛错（返回 {ok:false} 值级结果）——须检查 r.value
+          // 2026-08-31 审计修复：模型管理失败不抛错（返回 {ok:false} 值级结果）——须检查 r.value
           if (r.ok && r.value?.ok) { showToast('Phi-3:mini 下载已开始（完成后状态自动更新）'); void load(); }
           else showToast(`下载失败：${r.value?.error ?? r.error ?? '未知错误'}`);
         };
@@ -2773,7 +2782,7 @@ window.__ModuleLoader__.load({
                         e(Btn, { label: '↩ 回滚', small: true, onClick: () => void doRollback(c) })),
                     );
                   }))),
-            e(Card, { key: 'sub', title: '🌙 潜意识 · 梦境引擎', right: e(Btn, { label: sub?.enabled ? '关闭' : '开启', kind: sub?.enabled ? 'danger' : 'primary', small: true, onClick: () => void toggleSubEnabled() }) },
+            e(Card, { key: 'sub', title: '🌙 潜意识 · 梦境引擎（2026-08-31）', right: e(Btn, { label: sub?.enabled ? '关闭' : '开启', kind: sub?.enabled ? 'danger' : 'primary', small: true, onClick: () => void toggleSubEnabled() }) },
               e('p', { className: 'dim' }, sub?.enabled
                 ? `睡眠期自动运行：高频记忆凝缩（${sub?.condenseModel === 'phi' ? '本地 Phi-3:mini' : 'DeepSeek'}）→ 异质碰撞（${sub?.llmModel === 'phi' ? '本地 Phi-3:mini' : 'DeepSeek'}）→ 置信度调度入进化队列；苏醒生成梦境呓语，话题相关时隐式注入。潜记忆池 ${sub?.poolCount ?? 0} 条，草案 ${sub?.draftCount ?? 0} 条，已碰撞 ${sub?.stats?.collisions ?? 0} 次，已导入进化 ${sub?.stats?.imported ?? 0} 条，自动微调 ${sub?.stats?.autoApplied ?? 0} 条，呓语注入 ${sub?.stats?.injects ?? 0} 次。`
                 : '已关闭：睡眠期不运行梦境引擎（可手动触发下方「跑一次梦境」）。'),
@@ -2826,10 +2835,12 @@ window.__ModuleLoader__.load({
         );
       }
 
-      // ================= 人格一致性 =================
+      // ================= 人格一致性（2026-08-31） =================
       /** 轨迹散点图（PCA 前 2 维；turn=蓝点，waypoint=琥珀星形）。
-       *  按显示尺寸（clientWidth×固定高度 240）重设内部分辨率（×devicePixelRatio 保清晰），
-       *  绘制经 ctx.scale 归一化，任何容器宽度下都不变形。 */
+       *  2026-09-01-3 修复拉伸：canvas 内部分辨率曾固定 640×240，而 CSS width:100% 会把
+       *  显示宽度拉大到卡片全宽 → 内部坐标系与显示尺寸不一致，点/文字被横向拉伸数倍。
+       *  现按显示尺寸（clientWidth×固定高度 240）重设内部分辨率（×devicePixelRatio 保清晰），
+       *  绘制经 ctx.scale 归一化，任何容器宽度下都不再变形。 */
       function drawScatter(canvas, points) {
         if (!canvas || !Array.isArray(points) || points.length === 0) return;
         const ctx2 = canvas.getContext('2d');
@@ -2888,7 +2899,7 @@ window.__ModuleLoader__.load({
         }, [rpc, showToast]);
         useEffect(() => { void load(); }, [load]);
         useEffect(() => { if (canvasRef.current) drawScatter(canvasRef.current, pca?.points ?? []); }, [pca]);
-        // 卡片随窗口变宽时 canvas 显示尺寸变化，重设内部分辨率并重绘（防拉伸/模糊）
+        // 2026-09-01-3：卡片随窗口变宽时 canvas 显示尺寸变化，重设内部分辨率并重绘（防拉伸/模糊）
         useEffect(() => {
           const el = canvasRef.current;
           if (!el) return;
@@ -3015,7 +3026,7 @@ window.__ModuleLoader__.load({
               payload.at = d.getTime();
             }
           } else if (form.schedule === 'one-time') {
-            // 一次性任务必须选到期时间，否则会立即触发（服务端把无 at 当作 now）
+            // 2026-08-30：一次性任务必须选到期时间，否则会立即触发（服务端把无 at 当作 now）
             if (!form.at) { showToast('一次性任务请选择到期时间'); return; }
             const t = new Date(form.at).getTime();
             if (!Number.isNaN(t)) payload.at = t;
@@ -3146,7 +3157,7 @@ window.__ModuleLoader__.load({
         useEffect(() => { void load(); }, [load]);
 
         const q = query.trim().toLowerCase();
-        // description 可能缺失（服务端 summary 恒给，防护与渲染层以 '—' 兜底）
+        // 2026-09-07 修复：description 可能缺失（服务端 summary 恒给但防护与渲染层 '—' 兜底一致）
         const ftools = q ? tools.filter((x) => (x.name || '').toLowerCase().includes(q) || (x.description || '').toLowerCase().includes(q)) : tools;
         const fskills = q ? skills.filter((x) => (x.name || '').toLowerCase().includes(q) || (x.description || '').toLowerCase().includes(q) || (x.whenToUse || '').toLowerCase().includes(q)) : skills;
 
@@ -3190,7 +3201,7 @@ window.__ModuleLoader__.load({
         const [editingIdx, setEditingIdx] = useState(-1);
         const [testRes, setTestRes] = useState('');
 
-        // 测试连接：避免配置错误后自循环静默瘫痪
+        // 测试连接（2026-08-30：避免配置错误后自循环静默瘫痪）
         const testProvider = async () => {
           if (!form.baseURL.trim() || !form.model.trim()) { setTestRes('请先填写接口地址与模型名'); return; }
           setTestRes('测试中…');
@@ -3251,7 +3262,7 @@ window.__ModuleLoader__.load({
             { k: '已启用', v: providers.filter((p) => p.enabled !== false).length },
             { k: 'DeepSeek 密钥', v: data?.deepseekConfigured ? '已配置' : '未配置' },
           ] }),
-          // 未配置模型提供商横幅（与发送拦截同口径：DeepSeek 密钥或启用中的自定义提供商任一即可）
+          // 2026-08-30：未配置模型提供商横幅（与发送拦截同口径：DeepSeek 密钥或启用中的自定义提供商任一即可）
           (data && !data.deepseekConfigured && !providers.some((p) => p.enabled !== false && p.apiKeySet && p.baseURL && p.model))
             ? e('div', { className: 'arc-banner-warn' }, '⚠️ 未配置模型提供商：对话消息将不会发送。请在上方填入 DeepSeek API 密钥并保存，或添加并启用一个自定义提供商。')
             : null,
@@ -3347,7 +3358,7 @@ window.__ModuleLoader__.load({
         );
       }
 
-      // ================= 每日简报 =================
+      // ================= 每日简报（2026-08-30） =================
       function PageReport({ rpc, showToast }) {
         const [busy, setBusy] = useState(false);
         const [report, setReport] = useState(null); // {brief, counts, generatedAt}
@@ -3373,7 +3384,7 @@ window.__ModuleLoader__.load({
         );
       }
 
-      // ===== 记录面板 Dock：底部常驻可收起，💬提示词 / ⚠️报错 双页签 =====
+      // ===== 记录面板 Dock（阶段六 2026-09-03）：底部常驻可收起，💬提示词 / ⚠️报错 双页签 =====
       // 数据源：modules/ledger 宿主五路采集（logger/console/fetch/ctx.llm/进程级 + RPC 转发 + 浏览器上报），
       // 经 /archive-ledger RPC 读取；模块色标与各页面/模块一一对应，时间标注精确到秒。
       const LEDGER_META = {
@@ -3473,7 +3484,7 @@ window.__ModuleLoader__.load({
           setBusy(true);
           try {
             const op = tab === 'prompts' ? 'prompts.list' : 'errors.list';
-            const r = await ledRpc(op, { limit: 100 }); // 轮询限 100 条，控制 2.5s/次的全量传输载荷
+            const r = await ledRpc(op, { limit: 100 }); // 2026-09-03-6：轮询限 100 条，控制 2.5s/次的全量传输载荷
             if (r.ok) {
               if (tab === 'prompts') setPrompts(r.value?.items ?? []);
               else setErrors(r.value?.items ?? []);

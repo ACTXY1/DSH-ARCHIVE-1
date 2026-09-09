@@ -1,2 +1,2 @@
 name: archive-standard
-description: 功能完整的编码 Agent（standard 的本地副本，开启 web_fetch），支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。
+description: 功能完整的编码 Agent（standard 的本地副本，2026-08-30 起开启 web_fetch），支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。

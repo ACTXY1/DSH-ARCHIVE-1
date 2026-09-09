@@ -6,9 +6,9 @@
 #      对比 Windows 分发包 / 手机分发包的共享代码一致性。
 #      自动容忍三处已声明平台差异：
 #        a) 路径内容差异（仓库=当前主目录路径；分发包预归一化 C:/DSH-ARCHIVE）
-#        b) 手机包缺少根级平台脚本（.cmd/.ps1/tray.ps1，按平台形态要求）
+#        b) 手机包缺少根级平台脚本（.cmd/.ps1/tray.ps1，用户 2026-09-01 要求）
 #        c) Windows 包剔除手机专属 mobile-ui（模块目录 + cordis.patch.yml 专属块
-#           + package.json 依赖行，平台形态决策）
+#           + package.json 依赖行，用户 2026-09-02 决策 B）
 #      忽略运行时目录（data/logs/node_modules/.pnpm-store/ollama/backups）。
 #    build -Platform win|mobile|both：
 #      用仓库内容重建分发包的代码部分（保留包内 data/ollama/backups 用户数据）：

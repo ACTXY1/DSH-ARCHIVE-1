@@ -1,5 +1,5 @@
 /**
- * 思维预设：用户指令注入层（纯函数，便于单测）。
+ * 思维预设（2026-09-04-2）：用户指令注入层（纯函数，便于单测）。
  *
  * 设计初衷：思维循环决定 AI 的自主输出与行为，双 Agent 另加记忆概括与输出审查。
  * 「思维预设」让用户以「预设组 + 指令条目」的方式主动插入要求，规范/调整 AI 输出
@@ -148,9 +148,9 @@ export function assembleInstructions(st, { hitTexts = [], capChars } = {}) {
 }
 
 /** 对话回复软自检的附加文本（仅**活跃预设**内常驻 + scope 含 dialogue 的条目，纯文本拼接，护栏内）。
- * 须按 activePresetId 过滤：未启用任何预设（activePresetId=''）时不得注入历史保存的 dialogue 指令
- * （保持"零配置=零注入"）；激活 A 预设时不得注入 B 预设的 dialogue 指令（单活跃预设语义）。
- * 此处与 assembleInstructions（经 activeEntries 过滤）语义对齐。 */
+ * 2026-09-07 审计修复：此前未按 activePresetId 过滤——①未启用任何预设（activePresetId=''）时仍会注入
+ * 历史保存过的 dialogue 指令，破坏"零配置=零注入"；②激活 A 预设时 B 预设的 dialogue 指令也被注入，
+ * 破坏"同一时刻仅一个活跃预设生效"。此处与 assembleInstructions（经 activeEntries 过滤）语义对齐。 */
 export function dialogueInstructionText(st) {
   const actId = st?.activePresetId;
   const lines = (Array.isArray(st?.entries) ? st.entries : [])

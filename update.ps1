@@ -5,7 +5,7 @@
 #  手动：
 #    powershell -NoProfile -ExecutionPolicy Bypass -File update.ps1
 #    powershell -NoProfile -ExecutionPolicy Bypass -File update.ps1 -Rollback
-#    powershell -NoProfile -ExecutionPolicy Bypass -File update.ps1 -Rollback -TargetTag v2026-09-08
+#    powershell -NoProfile -ExecutionPolicy Bypass -File update.ps1 -Rollback -TargetTag v2026-09-01
 #  开发/测试开关：-NoFetch（跳过 fetch） -NoStop（不停服） -NoFix（跳过 fix 步骤） -NoStart（更新后不启动）
 #
 #  流程：互斥 → 校验项目根 → 校验 git → fetch（失败不打断服务）→ 版本比较
@@ -112,7 +112,7 @@ function Write-Log([string]$msg) {
     } catch { }
 }
 
-# ---- 代理支持：git 不读 Windows 系统代理——开着 v2rayN/Clash 等代理软件时，
+# ---- 代理支持（2026-09-03）：git 不读 Windows 系统代理——开着 v2rayN/Clash 等代理软件时，
 #      若只设了系统代理（或仅监听 socks 口），git fetch 仍直连必失败。解析顺序：
 #      ①环境变量 → ②git 全局/本地 http.proxy（显式空值=强制直连）→ ③Windows 系统代理。
 #      纯 host:port 无法判断协议 → 先探测端口协议（socks5h / http），避免把 socks 口当 http 用。
@@ -365,7 +365,10 @@ try {
         if (Test-Path $fix) {
             Write-Step '运行位置归一化与完整性修复（fix-project-location -NoPrompt）'
             $code = Exec-Native { powershell -NoProfile -ExecutionPolicy Bypass -File $fix -NoPrompt }
-            if ($code -ne 0) { Write-Warn 'fix 步骤未完全通过，请查看上方输出；可重试或回滚。' }
+            # 2026-09-05：fix 失败(含 junction 防呆中止/归一化未完成)必须中止更新，不能再启动服务——
+            # 否则 cordis.patch.yml 可能残留仓库标准路径 C:/DSH-ARCHIVE，服务会把数据读写到错误位置，
+            # 表现为"重进后对话记录与模型提供商配置为空"。
+            if ($code -ne 0) { throw '位置归一化(fix)未通过——数据根可能未修正，已中止以免读写错位数据。请按上方提示处理后重试，或回滚。' }
         }
     }
 

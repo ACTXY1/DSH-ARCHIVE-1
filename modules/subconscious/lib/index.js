@@ -1,7 +1,7 @@
 /**
  * dsh-archive-subconscious —— 潜意识系统（梦境引擎）。
  *
- * 需求：异步后台进程，只在"睡眠期"触发，为进化提案提供灵感。
+ * 需求（用户 2026-08-31）：异步后台进程，只在"睡眠期"触发，为进化提案提供灵感。
  *
  *  1. 记忆脱粒机（凝缩）：扫描向量库中过去 24h 内访问频率＞3 的记忆片段 → embedding 聚类 →
  *     每组用本地小模型（Phi-3:mini，随包内置；可选 DeepSeek）生成一条高度抽象的原型陈述 → 潜记忆池。
@@ -101,7 +101,7 @@ function bootLine(line) {
   try { process.stdout.write(line + '\n'); } catch { /* 非 CLI 环境忽略 */ }
 }
 
-/** 时间戳 → MM-DD HH:MM（本地时区；给 LLM 的记忆片段标注时间，防旧内容被当"最近"）。 */
+/** 时间戳 → MM-DD HH:MM（本地时区；2026-09-03-6 给 LLM 的记忆片段标注时间，防旧内容被当"最近"）。 */
 function fmtStamp(ts) {
   try {
     const d = new Date(Number(ts));
@@ -166,7 +166,8 @@ export function apply(ctx, rawConfig) {
   const baseState = () => ({
     version: 1,
     enabled: config.enabled,
-    // overrides：运行时配置覆盖持久化（autoApply/模型选择重启保持，不随重启回退默认值）
+    // 2026-08-31 审计修复：运行时配置覆盖持久化（autoApply/模型选择重启保持——此前只存内存
+    // config，重启静默回退默认值，安全相关开关"看似生效实则重置"）
     overrides: { autoApply: undefined, condenseModel: undefined, llmModel: undefined },
     pool: [],            // 潜记忆池 [{id, text, vec, createdAt, groupCount}]
     drafts: [],          // 草案记录 [{id, candidateId, a, b, draft, selfConsistency, novelty, gradient, verdict, at}]
@@ -220,7 +221,7 @@ export function apply(ctx, rawConfig) {
 
   // ── embed（复用 memory 同源 ollama；数组批量） ──
   async function embedText(input) {
-    // race 结束后 clearTimeout，防止残留悬挂定时器
+    // 2026-08-31 审计修复：race 后 clearTimeout（此前每次调用残留最长 embedTimeoutMs 悬挂定时器）
     let to = null;
     const timeout = new Promise((_, rej) => { to = setTimeout(() => rej(new Error('embed 超时（ollama 无响应）')), config.embedTimeoutMs); });
     try {
@@ -230,7 +231,7 @@ export function apply(ctx, rawConfig) {
       ]);
     } finally { clearTimeout(to); }
   }
-  /** 大批量 embed 分批（embedTimeoutMs 按批独立；防大批量单次 race 必超时）。 */
+  /** 大批量 embed 分批（embedTimeoutMs 按批独立；防 200 条单 race 必超时——审计 major 修复）。 */
   async function embedBatches(texts) {
     const BATCH = 32;
     const out = [];
@@ -271,7 +272,8 @@ export function apply(ctx, rawConfig) {
 
   /**
    * DeepSeek（自定义 provider 优先，失败回退官方 ctx.llm.stream；与 loop/evolution 同款）。
-   * 全链路施加 llmTimeoutMs 超时：端点挂起时中止流，避免引擎卡死。
+   * 2026-08-31 审计修复：全链加 llmTimeoutMs 超时——此前无 signal，端点挂起会让 for-await 永不结束
+   * → runDreamEngine 卡死、engineRunning 永久 true、梦境引擎静默死亡（major）。
    */
   async function deepseekChat(system, user, maxTokens = 700) {
     const ac = new AbortController();
@@ -355,12 +357,13 @@ export function apply(ctx, rawConfig) {
   async function condense() {
     const mems = highFreqMemories();
     if (mems.length === 0) return 0;
+    // 2026-08-31 审计修复：分批 embed（单 race 8s 总预算对 200 条必超时）
     const vecs = await embedBatches(mems.map((m) => m.content.slice(0, 300)));
     if (!vecs || vecs.length === 0) return 0;
     const clusters = clusterBy(vecs, config.clusterSim).slice(0, config.condenseTopK);
     let added = 0;
     for (const c of clusters) {
-      // 每组记忆片段前缀真实时间（[MM-DD HH:MM]），保证 AI 读到的每条记忆带时间标注
+      // 2026-09-03-6：每组记忆片段前缀真实时间（[MM-DD HH:MM]），保证 AI 读到的每条记忆带时间标注
       const excerpts = c.items.slice(0, 4).map((i) => {
         const m = mems[i];
         const head = Number(m?.createdAt ?? 0) > 0 ? `[${fmtStamp(Number(m.createdAt))}] ` : '';
@@ -456,7 +459,8 @@ export function apply(ctx, rawConfig) {
     if (!draft || !draft.content || !['persona-add', 'skill-create', 'skill-improve'].includes(draft.type)) {
       throw new Error('草案形状不合法');
     }
-    // persona-add 的 section 须为六人格分区之一（LLM 输出不可控，前置拦截判 skip，避免到 persona.set 才报错）
+    // 2026-08-31 审计修复：persona-add 的 section 须为六人格分区之一（LLM 输出不可控，
+    // 非法 section 会让审批/自动应用在 persona.set 才报错——前置拦截判 skip）
     if (draft.type === 'persona-add' && !['identity', 'values', 'traits', 'style', 'directives', 'capabilities'].includes(draft.section)) {
       st.stats.skips++;
       st.drafts.push({ id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, candidateId: null, a: a.text, b: b.text, draft, selfConsistency, novelty: null, gradient: false, verdict: 'skip-bad-section', at: Date.now() });
@@ -491,7 +495,7 @@ export function apply(ctx, rawConfig) {
       return candidateId;
     };
     if (config.autoApply && selfConsistency > config.selfConsistencyAuto && gradient && draft.type === 'persona-add') {
-      // doImport 的安全门/section 校验可能抛错：包 try，被拒草案记录 skip 而非整次碰撞失败
+      // 2026-08-31 审计补强：doImport 的安全门/section 校验可能抛错——包 try，被拒草案记录 skip 而非整次碰撞失败
       try { doImport(); } catch (error) {
         logger.warn(`archive-subconscious: 草案被进化队列拒绝：${error?.message ?? error}`);
         st.stats.skips++;
@@ -502,7 +506,7 @@ export function apply(ctx, rawConfig) {
           if (ar?.applied === true) {
             st.stats.autoApplied++;
             verdict = 'auto-applied';
-            // 用户设计"仅在通知和自进化栏显示"——自动微调须发通知
+            // 2026-08-31 审计补缺：用户设计"仅在通知和自进化栏显示"——自动微调须发通知
             try {
               const notify = ctx.get('notify');
               const p = notify?.send?.({ content: `🌙 灵感进化已自动微调（自洽 ${selfConsistency}，与近期进化方向一致）：${String(draft.content).slice(0, 80)}（自进化栏可回滚）`, source: 'subconscious', scope: 'panel' });
@@ -623,7 +627,7 @@ export function apply(ctx, rawConfig) {
         body: JSON.stringify({ model: config.phiModel }),
       });
       if (!res.ok) { downloading = false; return { started: false, ok: false, status: res.status }; }
-      // 流消费转后台任务，避免阻塞 control RPC 直到 2GB 拉完
+      // 2026-08-31 审计修复：流消费转后台任务（此前阻塞 control RPC 直到 2GB 拉完）
       if (res.body) void consumePullStream(res.body);
       else downloading = false;
       return { started: true, ok: true };
@@ -635,7 +639,7 @@ export function apply(ctx, rawConfig) {
 
   async function modelRemove() {
     try {
-      // 本地 ollama 短操作加 15s 超时（不可达时快速失败而非挂起 RPC）
+      // 2026-08-31 审计：本地 ollama 短操作加 15s 超时（不可达时快速失败而非挂起 RPC）
       const res = await fetch(`${config.ollamaBaseUrl}/api/delete`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -678,7 +682,7 @@ export function apply(ctx, rawConfig) {
     },
     configure: (patch = {}) => {
       if (typeof patch.enabled === 'boolean') { st.enabled = patch.enabled; markDirty(); }
-      // 运行时覆盖写入 st.overrides 持久化（重启保持）
+      // 2026-08-31 审计修复：运行时覆盖写入 st.overrides 持久化（重启保持）
       if (typeof patch.autoApply === 'boolean') {
         config.autoApply = patch.autoApply;
         st.overrides.autoApply = patch.autoApply;
@@ -737,7 +741,7 @@ export function apply(ctx, rawConfig) {
       if (event?.type !== 'turn/start') return;
       if (!st.enabled || !st.whisper || st.whisper.consumed) return;
       if (Date.now() - st.whisper.at > config.whisperTtlMs) {
-        // TTL 过期：consumed 标记须持久化（markDirty），防重启后过期呓语再次注入
+        // 2026-08-31 审计修复：TTL 过期标记须持久化（此前缺 markDirty）
         st.whisper.consumed = true;
         markDirty();
         return;
@@ -749,7 +753,7 @@ export function apply(ctx, rawConfig) {
         void (async () => {
           try {
             const uv = await embedText(lastUserText.slice(0, 200)).catch(() => null);
-            // await 后复查 consumed/TTL：竞态下两条异步路径可能双注入，须二次校验
+            // 2026-08-31 审计修复：await 后复查 consumed/TTL——竞态下两条异步路径可能双注入
             if (!st.enabled || !st.whisper || st.whisper.consumed || Date.now() - st.whisper.at > config.whisperTtlMs) return;
             if (uv && cosine(uv, st.whisper.vec) < config.whisperSim) return;
             injectWhisper(session, text);

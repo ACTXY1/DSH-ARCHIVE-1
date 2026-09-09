@@ -1,4 +1,4 @@
-﻿# Sync local project plugins into the profile node_modules.
+# Sync local project plugins into the profile node_modules.
 # Background: pnpm treats file: dependencies as hard links / static references;
 # editing source files (the write tool recreates files and breaks hard links)
 # leaves the profile boot loading stale inode content.

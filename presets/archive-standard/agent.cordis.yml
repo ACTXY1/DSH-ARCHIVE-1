@@ -244,8 +244,8 @@
     allowParallelInProgress: true
 
 # The `web` service and its search/fetch providers stay in the host composition; only
-# the model-facing tool is per-session. archive-standard = standard 副本（开启 fetch）：
-# 配合宿主组合的 dsh-archive-web-fetch provider（沙箱内 schannel TLS 不可用，
+# the model-facing tool is per-session. archive-standard = standard 副本（2026-08-30）：
+# 开启 fetch，配合宿主组合的 dsh-archive-web-fetch provider（沙箱内 schannel TLS 不可用，
 # 网页正文抓取改走宿主侧 fetch）。
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'

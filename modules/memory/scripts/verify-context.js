@@ -13,7 +13,7 @@ const ctx = {
   provide: () => {},
   on: () => {},
   get: (name) => name === 'tools' ? { register: () => {} } : undefined,
-  // 插件使用 ctx.timer.setInterval（WAL checkpoint/自动整合定时器），stub 必须提供 timer
+  // 2026-08-30 修复：插件 8/30 新增 WAL checkpoint/自动整合定时器（ctx.timer.setInterval），stub 必须提供 timer
   timer: { setInterval: () => 1, setTimeout: () => 1 },
   systemPrompt: {
     context: (c) => { registeredContexts.push(c); },

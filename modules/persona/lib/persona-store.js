@@ -1,11 +1,11 @@
 /**
- * 人格权威存储：persona.json 当前状态 + persona-history.jsonl 追加式留档账本。
+ * 人格权威存储（阶段三）：persona.json 当前状态 + persona-history.jsonl 追加式留档账本。
  *
  * - persona.json：唯一权威（当前人格），原子写（tmp+rename）；结构校验。
  * - persona-history.jsonl：追加式账本，每次变更记录 {version, at, by, summary, sections}
- *   （含完整快照）——既是"每次进化留档"，也让"回滚接口"可直接恢复任意版本。
+ *   （含完整快照）——既是"每次进化留档"，也让阶段四"回滚接口"可直接恢复任意版本。
  * - 溯源：每个条目带 addedBy/addedAt/modifiedBy/modifiedAt；version 随每次变更 +1。
- * - 供自进化模块使用：update/add 可传 by='evolution'；rollback(version, by) 恢复历史快照。
+ * - 为阶段四预留：update/add 可传 by='evolution'；rollback(version, by) 恢复历史快照。
  */
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, existsSync } from 'node:fs';
@@ -38,7 +38,7 @@ function newEntry(section, content, { importance, confidence, by, source, merged
     modifiedAt: null,
     source: source ?? null,
   };
-  // 凝练溯源：整体重建（replace）时记录"本条由哪些旧条目合并而来"（旧 id 清单）。
+  // 2026-09-08 凝练溯源：整体重建（replace）时记录"本条由哪些旧条目合并而来"（旧 id 清单）。
   if (Array.isArray(mergedFrom)) {
     const ids = mergedFrom.map((x) => String(x).trim()).filter(Boolean).slice(0, 64);
     if (ids.length > 0) entry.mergedFrom = ids;
@@ -114,8 +114,8 @@ export class PersonaStore {
     const by = opts.by ?? 'user';
     const list = Array.isArray(entries) ? entries : [entries];
     if (list.length === 0) return { version: this.data.version, added: 0 };
-    // 先全量校验再写入：防止中途一条非法（section/content）抛错时，前面的条目已进内存但未落盘，
-    // 造成内存与磁盘不一致（下次任何 _save 会落盘脏数据）
+    // 2026-08-31 审计：先全量校验再写入——此前循环内逐条 push，中途一条非法（section/content）
+    // 抛错时前面的条目已进内存但未落盘 → 内存与磁盘不一致，下次任何 _save 会落盘脏数据
     const prepared = list.map((e) => {
       const section = PERSONA_SECTIONS.includes(e?.section) ? e.section : null;
       if (!section) throw new Error(`persona.set: 非法 section "${e?.section}"（可选：${PERSONA_SECTIONS.join('/')}）`);
@@ -133,7 +133,7 @@ export class PersonaStore {
   }
 
   /**
-   * 整体重建全部人格条目（一键凝练用）。
+   * 整体重建全部人格条目（2026-09-08 一键凝练用）。
    * 与 set（追加）/update（改一条）/remove（删一条）不同：以给定条目列表一次性替换全部分区，
    * 一次原子落盘 + 一条留档账本（账本含旧完整快照，回滚即回到凝练前版本）。
    * 条目可携带 mergedFrom（合并来源的旧条目 id 清单，溯源展示用）。
@@ -144,7 +144,7 @@ export class PersonaStore {
   replace(entries, opts = {}) {
     const by = opts.by ?? 'user';
     const list = Array.isArray(entries) ? entries : [];
-    // 先全量校验再写入（与 set 同款防护：中途一条非法抛错会留下内存与磁盘不一致）
+    // 先全量校验再写入（2026-08-31 set 同款教训：中途一条非法抛错会留下内存与磁盘不一致）
     const prepared = list.map((e) => {
       const section = PERSONA_SECTIONS.includes(e?.section) ? e.section : null;
       if (!section) throw new Error(`persona.replace: 非法 section "${e?.section}"（可选：${PERSONA_SECTIONS.join('/')}）`);
@@ -163,7 +163,7 @@ export class PersonaStore {
   }
 
   /**
-   * 更新一条已存在条目（增补/修正，自进化模块用 by='evolution'）。
+   * 更新一条已存在条目（增补/修正，阶段四自进化用 by='evolution'）。
    * @param {string} id
    * @param {{content?:string, importance?:number, confidence?:number, by?:string}} patch
    */

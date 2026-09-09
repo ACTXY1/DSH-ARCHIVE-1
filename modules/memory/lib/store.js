@@ -1,12 +1,12 @@
 /**
- * SQLite 向量存储（基于 ollama 的向量数据库之"存储/检索层"）。
+ * SQLite 向量存储（阶段二：基于 ollama 的向量数据库之"存储/检索层"）。
  * 使用 Node 内置 node:sqlite（DatabaseSync），零原生编译依赖。
  *
  * - 向量：Float32Array 小端 BLOB；检索：余弦相似度暴力扫描（万级记忆毫秒级完成）。
- * - 混合检索（60% 语义 + 40% 关键词）：
+ * - 混合检索（参照 ACE 经验 60%语义/40%关键词，针对本项目特化）：
  *   FTS5 关键词 + 语义向量联合排序，final = 0.6*cosine + 0.4*bm25norm。
  *   FTS5 不可用时自动退化为纯语义。
- * - 预留扩展字段：confidence / last_verified / refresh_interval_days（遗忘与自进化用）。
+ * - 预置未来阶段字段：confidence / last_verified / refresh_interval_days（遗忘与自进化用）。
  */
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
@@ -72,7 +72,7 @@ export class MemoryStore {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA synchronous = NORMAL');
-    // WAL 频繁自动 checkpoint（500 页 ≈ 2MB），并暴露 checkpoint() 供定时/备份前调用，
+    // 2026-08-30：WAL 更频繁自动 checkpoint（500 页 ≈ 2MB），并暴露 checkpoint() 供定时/备份前调用，
     // 防止 WAL 无限增长、断电/强杀时 .db 文件落后过多
     this.db.exec('PRAGMA wal_autocheckpoint = 500');
     this.db.exec(`
@@ -167,8 +167,8 @@ export class MemoryStore {
       count: this.db.prepare('SELECT COUNT(*) AS n FROM memories'),
       byKind: this.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE kind = ?'),
       all: this.db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT ? OFFSET ?'),
-      // 遗忘列表过滤下推 SQL：若先 LIMIT 200 再 JS 过滤，活跃记忆超 200 时被遗忘条目
-      // 全部不可见，遗忘/恢复/遗忘作业复核失效
+      // 2026-08-31 审计修复：遗忘列表过滤下推 SQL（此前先 LIMIT 200 再 JS 过滤——活跃记忆超
+      // 200 时被遗忘条目全部不可见，遗忘/恢复/遗忘作业复核失效）
       forgotten: this.db.prepare('SELECT * FROM memories WHERE forgotten > 0 ORDER BY created_at DESC LIMIT ?'),
       scan: this.db.prepare('SELECT rowid, id, embedding, content, kind, importance, confidence, protected, strength, forgotten, source, tags, meta, created_at, updated_at, access_count, last_access_at FROM memories'),
       byRowid: this.db.prepare('SELECT * FROM memories WHERE rowid = ?'),
@@ -200,8 +200,8 @@ export class MemoryStore {
       stateActive: this.db.prepare('SELECT * FROM user_state WHERE expires_at IS NULL OR expires_at > ? ORDER BY set_at DESC'),
       stateByState: this.db.prepare('SELECT * FROM user_state WHERE state = ?'),
       stateRemove: this.db.prepare('DELETE FROM user_state WHERE state = ?'),
-      // 单槽互斥：写入新状态前把其他仍有效状态标记过期（保留为历史行，仅退出
-      // "当前有效"集合；由 core.stateSet 语义层调用）
+      // 2026-09-03 记忆错乱修复：单槽互斥——写入新状态前把其他仍有效状态标记过期
+      //（保留为历史行，仅退出"当前有效"集合；由 core.stateSet 语义层调用）
       stateExpireOthers: this.db.prepare('UPDATE user_state SET expires_at = ?, updated_at = ? WHERE state != ? AND (expires_at IS NULL OR expires_at > ?)'),
       stateHistory: this.db.prepare('SELECT * FROM user_state ORDER BY updated_at DESC LIMIT ?'),
       stateSweep: this.db.prepare('DELETE FROM user_state WHERE expires_at IS NOT NULL AND expires_at < ?'),
@@ -258,14 +258,14 @@ export class MemoryStore {
     const id = input.id ?? randomUUID();
     const kind = normalizeKind(input.kind);
     const importance = clamp01(input.importance ?? 0.5);
-    // tags 归一化：LLM 决策/服务直调可能传非数组 → 统一为字符串数组（防后续处理 TypeError）
+    // 2026-08-31 审计修复：tags 归一化（LLM 决策/服务直调可能传非数组 → tags.some TypeError 致写入失败）
     const tags = Array.isArray(input.tags) ? input.tags.filter((t) => typeof t === 'string') : [];
     const content = String(input.content ?? '').trim();
     if (!content) throw new Error('memory.write: content 必填且不能为空字符串');
     const protectedFlag = this._isProtected({ kind, importance, tags, protected: input.protected });
     const createdAt = input.createdAt ?? now; // 支持回填/导入旧记忆
     const updatedAt = input.updatedAt ?? now;
-    // 导入时保留遗忘状态（0=活跃 1=软遗忘 2=归档；默认 0）
+    // 2026-08-30：支持导入时保留遗忘状态（0=活跃 1=软遗忘 2=归档；默认 0）
     const forgotten = [1, 2].includes(Number(input.forgotten)) ? Number(input.forgotten) : 0;
     this._stmt.insert.run(
       id,
@@ -322,7 +322,7 @@ export class MemoryStore {
       id,
     );
     if (this.fts && patch.content !== undefined && patch.content !== old.content) this._syncFts(id);
-    // content 变化时由上层（core.update）重新向量化，此处同步更新 embedding 列，
+    // 2026-08-30 审计修复：content 变化时由上层（core.update）重新向量化，此处同步更新 embedding 列，
     // 避免编辑后的记忆继续用旧向量参与语义检索（内容与语义错位）。
     if (patch.embedding !== undefined) this._stmt.setEmbedding.run(encodeEmbedding(patch.embedding), id);
     return true;
@@ -405,7 +405,7 @@ export class MemoryStore {
 
   /** 列出软遗忘/归档记忆（供管理界面与显式检索）。 */
   forgottenList(limit = 50) {
-    // WHERE forgotten>0 下推：若先 LIMIT 200 再 JS 过滤，活跃记忆超 200 时列表恒空
+    // 2026-08-31 审计修复：WHERE forgotten>0 下推（原 LIMIT 200 后 JS 过滤，活跃>200 时恒空）
     return this._stmt.forgotten.all(Math.max(1, Math.min(500, limit || 50))).map(hydrate);
   }
 
@@ -541,7 +541,7 @@ export class MemoryStore {
    * 安全删除 FTS 行：先确认索引中存在该 rowid 再 DELETE。
    * 原因：对外部内容 FTS5 表删除不存在的 rowid 会触发 SQLite "database disk
    * image is malformed"（errcode 267）——首次写入/旧库升级等索引与内容表不同步
-   * 的场景下必须避免。
+   * 的场景下必须避免。已实测确认（scripts/probe-del.js）。
    */
   _ftsDeleteSafe(rowid) {
     if (!this.fts) return;
@@ -564,10 +564,11 @@ export class MemoryStore {
     return this._stmt.all.all(limit, offset).map(hydrate);
   }
 
-  // ===== 整合 / 导入 =====
+  // ===== 整合 / 导入（2026-08-30） =====
 
-  /** 按 kind+source+时间范围查询（记忆整合作业用）；仅查未保护记忆（WHERE protected = 0）——
-   *  受保护记忆不参与聚合，与 softForgetMany 的保护豁免保持一致（保护=不可遗忘、不可凝练合并）。 */
+  /** 按 kind+source+时间范围查询（记忆整合作业用）。
+   *  2026-08-30：仅查未保护记忆（WHERE protected = 0）——受保护记忆不参与聚合，
+   *  与 softForgetMany 的保护豁免保持一致（保护=不可遗忘、不可凝练合并）。 */
   listBySourceSince({ kind, source, sinceMs, limit = 50 }) {
     return this.db.prepare('SELECT * FROM memories WHERE kind = ? AND source = ? AND created_at >= ? AND protected = 0 ORDER BY created_at DESC LIMIT ?')
       .all(kind, source, sinceMs, Math.min(200, limit)).map(hydrate);
@@ -600,7 +601,7 @@ export class MemoryStore {
           confidence: row.confidence ?? 1.0, source: row.source ?? 'imported',
           tags: parseJson(row.tags, []), meta: parseJson(row.meta, {}),
           protected: row.protected === 1,
-          forgotten: row.forgotten ?? 0, // 保留备份中的遗忘状态：导入不"复活"已遗忘记忆
+          forgotten: row.forgotten ?? 0, // 2026-08-30：保留备份中的遗忘状态，导入不再"复活"已遗忘记忆
           embedding: row.embedding ? decodeEmbedding(row.embedding) : undefined,
           createdAt: row.created_at, updatedAt: row.updated_at,
         });
@@ -726,8 +727,8 @@ export class MemoryStore {
     return this._stmt.stateActive.all(Date.now()).map(hydrateState);
   }
 
-  /** 单槽互斥：把"除 state 外仍有效"的状态行标记为已过期（保留历史，仅退出当前有效集合）。
-   *  @returns {number} 受影响行数 */
+  /** 单槽互斥（2026-09-03 记忆错乱修复）：把"除 state 外仍有效"的状态行标记为已过期
+   *  （保留历史，仅退出当前有效集合）。@returns {number} 受影响行数 */
   stateExpireOthers(state) {
     const now = Date.now();
     return this._stmt.stateExpireOthers.run(now, now, state, now).changes;
@@ -758,7 +759,7 @@ export class MemoryStore {
     this.db.close();
   }
 
-  /** 强制 WAL checkpoint（TRUNCATE）：把 WAL 合并回主库并截断，断电/强杀时数据落盘更完整。 */
+  /** 强制 WAL checkpoint（TRUNCATE）：把 WAL 合并回主库并截断，断电/强杀时数据落盘更完整（2026-08-30）。 */
   checkpoint() {
     try {
       const row = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
@@ -768,7 +769,7 @@ export class MemoryStore {
     }
   }
 
-  /** SQLite quick_check：'ok' 表示结构完整（启动自检用）。 */
+  /** SQLite quick_check：'ok' 表示结构完整（2026-08-30，启动自检用）。 */
   quickCheck() {
     const row = this.db.prepare('PRAGMA quick_check').get();
     const detail = row && Object.values(row)[0];
@@ -822,7 +823,7 @@ function hydrate(row) {
   };
 }
 
-/** 安全 JSON 解析：单条 tags/meta 损坏（断电/半写/旧数据）不拖垮整条读取链路。 */
+/** 安全 JSON 解析：单条 tags/meta 损坏（断电/半写/旧数据）不拖垮整条读取链路（2026-08-30 审计修复）。 */
 function safeJson(text, fallback) {
   try {
     const v = JSON.parse(text);

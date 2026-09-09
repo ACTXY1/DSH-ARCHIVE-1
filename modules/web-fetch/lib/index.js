@@ -1,6 +1,6 @@
 // dsh-archive-web-fetch：宿主侧 URL 抓取 provider，注册到 ctx.web 的 fetch。
 //
-// 背景：DSH 的 Windows 沙箱（windows-acl 受限令牌，
+// 背景（2026-08-30 排查结论）：DSH 的 Windows 沙箱（windows-acl 受限令牌，
 // CreateRestrictedToken flags=13 = DISABLE_MAX_PRIVILEGE|LUA_TOKEN|WRITE_RESTRICTED）
 // 会让 schannel 的 AcquireCredentialsHandle 失败（SEC_E_NO_CREDENTIALS 0x8009030e），
 // 因此沙箱内的 pwsh/curl 全部 HTTPS 请求在 TLS 握手阶段死掉（"基础连接已经关闭"），
@@ -45,12 +45,12 @@ class ArchiveFetchProvider {
         },
       });
       const contentType = response.headers.get('content-type') ?? '';
-      // 二进制类型直接拒绝——response.text() 会把 zip/图片/pdf 无差别
+      // 2026-08-30 审计修复①：二进制类型直接拒绝——response.text() 会把 zip/图片/pdf 无差别
       // 按 UTF-8 解码成乱码返回；且大文件会整块缓冲进堆。
       if (/^(image\/|audio\/|video\/|application\/(octet-stream|zip|gzip|x-tar|pdf)|font\/)/i.test(contentType)) {
         throw new Error(`archive-web-fetch 拒绝二进制内容类型 ${contentType}（${request.url}）`);
       }
-      // content-length 预检：超过字节预算直接中止，防大文件 OOM
+      // 2026-08-30 审计修复②：content-length 预检，超过字节预算直接中止，防大文件 OOM
       const declared = Number(response.headers.get('content-length') ?? 0);
       if (Number.isFinite(declared) && declared > MAX_BODY_CHARS * 4) {
         throw new Error(`archive-web-fetch 内容过大（content-length=${declared}B，上限约 ${MAX_BODY_CHARS * 4}B）`);
@@ -80,7 +80,7 @@ class ArchiveFetchProvider {
 }
 
 function apply(ctx, config = {}) {
-  // timeoutMs 非法值（0/负数/NaN）回退默认，避免 setTimeout 立即触发致所有抓取必超时
+  // 2026-08-30 审计修复：timeoutMs 非法值（0/负数/NaN）回退默认，避免 setTimeout 立即触发致所有抓取必超时
   const raw = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timeoutMs = Number.isFinite(raw) && raw >= 1 ? raw : DEFAULT_TIMEOUT_MS;
   ctx.web.registerFetchProvider(new ArchiveFetchProvider(timeoutMs));

@@ -1,7 +1,7 @@
 /**
  * dsh-archive-clock —— DSH-ARCHIVE 虚拟时钟（Cordis 插件）。
  *
- * 需求：每次启动按设备时间同步（年月日 + 24 小时制）。
+ * 需求（阶段四）：每次启动按设备时间同步（年月日 + 24 小时制）。
  * 设计：
  *  - ctx.virtualClock 服务：now()/today()/time24h()/format()/sync()/describe()
  *  - 启动同步 + 周期校准（config.calibrateMs，默认 60s，成本可忽略）
@@ -80,7 +80,7 @@ export function apply(ctx, rawConfig) {
   }
 
   // 周期校准（时间源本身实时，sync 仅记录校准时刻）
-  // 记录句柄并在 dispose 时清理（热重载/插件停止不残留定时器）
+  // 2026-08-31 审计：记录句柄并在 dispose 时清理（热重载/插件停止不残留定时器）
   const calibrateTimer = ctx.timer.setInterval(() => { lastSyncAt = Date.now(); }, config.calibrateMs);
   ctx.on('dispose', () => {
     try { ctx.timer.clearInterval?.(calibrateTimer); } catch { /* 清理失败无碍 */ }

@@ -1,6 +1,7 @@
 // 总会话注入验证：notify 事件 → control 把 assistant/message 追加进 session-main
-// （总会话为异步恢复/创建，stub 提供 sessionPersistence 并等待就绪）
-// stub 传 dataRoot 为项目结构：dsh/data 位于 tmp 下，避免写入真实项目目录。
+// （2026-08-29：总会话改为异步恢复/创建，stub 提供 sessionPersistence 并等待就绪）
+// 2026-09-01：PROJECT_ROOT 改为 dataRoot 上级的上级（修复备份根错位回归）——stub 传 dataRoot
+// 为项目结构（dsh/data 在 tmp 下），MAIN_CWD=tmp（项目根语义）；cwd 断言随之改为 tmp。
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,10 +11,10 @@ const mod = await import('file:///C:/DSH-ARCHIVE/dsh/node_modules/dsh-archive-co
 
 const appended = [];
 const flushCalls = [];
-const capturedTimeouts = []; // 捕获挂起队列的自再挂 setTimeout，供测试驱动排空
+const capturedTimeouts = []; // 2026-09-03：捕获挂起队列的自再挂 setTimeout，供测试驱动排空
 let handler = null;
 let createdSession = null;
-// loop 会话态可切换——对话中(conversing) chat 级记录须挂起，回合结束(idle)再按序送达
+// 2026-09-03：loop 会话态可切换——对话中(conversing) chat 级记录须挂起，回合结束(idle)再按序送达
 let loopMode = 'idle';
 let loopQuietLeftMs = 0;
 const persistenceStub = {
@@ -25,11 +26,11 @@ const ctx = {
   on: (name, fn) => { if (name === 'archive/notify-sent') handler = fn; },
   provide: () => {},
   timer: { setInterval: () => 1, setTimeout: (fn) => { capturedTimeouts.push(fn); return capturedTimeouts.length; } },
-  // stub 提供 parallel：control 的 inject 回调经 ctx.parallel 切回主 ctx，缺失会抛 TypeError 致断言全部不跑
+  // 2026-08-30 修复：stub 缺 parallel —— control 的 inject 回调经 ctx.parallel 切回主 ctx，缺失会抛 TypeError 致断言全部不跑
   parallel: (events, fn) => { fn(); return Promise.resolve(); },
   inject: (services, cb) => cb({
     sessionPersistence: persistenceStub,
-    // control 还 inject settings/connection/workspaceRegistry/sessionTitle —— stub 补齐避免启动噪音
+    // 2026-09-01：control 还 inject settings/connection/workspaceRegistry/sessionTitle —— stub 补齐避免启动噪音
     settings: { register: () => ({}), get: () => ({}), update: async () => {} },
     connection: { rpc: { handle: () => {} } },
     workspaceRegistry: { list: async () => [], detachSession: async () => {}, attachSession: async () => {} },
@@ -62,19 +63,19 @@ function check(name, cond, detail = '') {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 模拟 notify 发送事件（总会话为异步初始化，需等待微任务完成）
-// 分级：仅 scope='chat' 记录注入对话流；scope='panel'（默认）只进通知流水，绝不注入
+// 2026-09-03 分级：仅 scope='chat' 记录注入对话流；scope='panel'（默认）只进通知流水，绝不注入
 await sleep(20);
 handler({ record: { id: 'n1', content: '⏰ 测试：主动消息注入总会话', source: 'schedule', at: 12345, scope: 'chat' } });
 await sleep(20);
 
-// MAIN_CWD=resolve(dataRoot,'..')（=tmp/dsh，主会话工作目录=profile 目录，
+// 2026-09-01-2：MAIN_CWD=resolve(dataRoot,'..')（=tmp/dsh，主会话工作目录=profile 目录，
 // 与持久化主会话 cwd 语义一致）；resolve() 在 Windows 返回反斜杠，断言前归一化为正斜杠比较
 check('总会话创建（session-main + cwd=profile 目录）', createdSession?.id === 'session-main' && String(createdSession?.opts?.meta?.cwd ?? '').replace(/\\/g, '/') === join(tmp, 'dsh').replace(/\\/g, '/'));
 check('assistant/message 事件追加', appended.length === 1 && appended[0].type === 'assistant/message');
 check('消息内容与角色正确', appended[0]?.data?.message?.role === 'assistant' && appended[0].data.message.content?.[0]?.text?.includes('主动消息'));
 check('surfaceOp=append', appended[0]?.surface?.surfaceOp === 'append');
 check('flush 被调用（持久化）', flushCalls.includes('session-main'));
-// panel 级记录（系统状态/操作流水）绝不注入对话流
+// panel 级记录（系统状态/操作流水）绝不注入对话流——此前"🤖 主动行动"泄露的根因通道
 handler({ record: { id: 'p1', content: '🧬 系统状态提示：进化候选生成', source: 'evolution', at: 12346, scope: 'panel' } });
 handler({ record: { id: 'p2', content: '🤖 主动行动：已执行：schedule_create（后果评估：x）', source: 'loop', at: 12347, scope: 'panel' } });
 handler({ record: { id: 'p3', content: '⚠️ 停机期间有任务错过', source: 'schedule', at: 12348, scope: 'panel' } });
@@ -89,7 +90,7 @@ handler({ record: { id: 'old', content: '旧格式无 scope 记录', source: 'lo
 await sleep(10);
 check('无 scope 记录按 panel 处理（不注入）', appended.length === 1);
 
-// 送达时机门控：对话回合进行中（conversing）到达的 chat 级记录先挂起，回合结束(idle)后按序送达
+// 2026-09-03 送达时机门控：对话回合进行中（conversing）到达的 chat 级记录先挂起，回合结束(idle)后按序送达
 // （防定时提醒/主动消息插进 AI 正在回复的对话中间 → 割裂）
 const appendedBeforeHold = appended.length;
 const timeoutsBeforeHold = capturedTimeouts.length;

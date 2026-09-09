@@ -1,10 +1,10 @@
 /**
- * dsh-archive-evolution —— DSH-ARCHIVE 自进化系统（Cordis 插件）。
+ * dsh-archive-evolution —— DSH-ARCHIVE 自进化系统（阶段四·4b，Cordis 插件）。
  *
  * 需求（用户定稿）：进化对象含虚拟人格与 skill（不仅限于此）；门控采纳
  * （隔离评估 + 安全门）；每次进化留档 + 回滚接口，由用户自行选择是否回滚。
  *
- * 流程：
+ * 流程（借鉴 eimemory 门控自进化经验并特化）：
  *   suggest()   → 召回记忆素材 → LLM 生成候选（persona-add / skill-create / skill-improve）
  *               → 隔离评估（规则安全门 + LLM 一致性/安全评估，不产生任何生效变更）
  *               → 账本留档（pending）
@@ -14,9 +14,10 @@
  *   reject()    → 账本 rejected
  *   rollback()  → 用户自选回滚：persona 恢复采纳前版本；skill 恢复旧内容（rolled-back）
  *
- * 自动建议：autoSuggest=true 时每日 autoHour（默认 22:00）自动 suggest（by='auto'，
- * 仅生成候选+隔离评估+留档，绝不自动采纳），生成 ≥1 条新候选时经 notify 主动告知。
- * 人格更新方案独立通道：suggest 拆分两次独立 LLM 调用——
+ * 自动建议（2026-08-31 用户需求"定期提供进化候选"接线）：
+ *   autoSuggest=true 时每日 autoHour（默认 22:00）自动 suggest（by='auto'，仅生成候选+隔离评估+留档，
+ *   绝不自动采纳），生成 ≥1 条新候选时经 notify 主动告知。
+ * 人格更新方案独立通道（2026-09-02 用户需求）：suggest 拆分两次独立 LLM 调用——
  *   - 人格通道：近 24h 对话记录（★重点标记用户对 AI 的要求/建议/期望/纠正）+ 人格发展轨迹
  *     （当前人格清单（含条目 id）+ 已采纳进化方向 + 一致性近期回复轨迹）→ 模型分析用户想要的
  *     进化方向 → 输出严格 YAML（persona_updates，section 严格按项目人格分区），支持 add（新增）
@@ -62,7 +63,7 @@ const DEFAULTS = {
   model: 'deepseek-v4-flash',
   maxConflict: 0.5,
   autoSuggest: false,
-  autoHour: 22, // 每日自动生成候选时刻（0-23）
+  autoHour: 22, // 每日自动生成候选时刻（0-23；2026-08-31 用户确认每日 1 次）
   autoNotify: true, // 自动生成 ≥1 条新候选后经 notify 主动告知
 };
 
@@ -121,7 +122,7 @@ function bootLine(line) {
   try { process.stdout.write(line + '\n'); } catch { /* ignore */ }
 }
 
-/** skill 名规范化：apply 与 rollback 必须用同一规则；name 为空时以候选 id 派生兜底名。 */
+/** skill 名规范化：apply 与 rollback 必须用同一规则（2026-08-30 修复：此前 apply 用 fallback 名、rollback 用原始名，name 为空时回滚静默无操作却记录成功）。 */
 function skillNameOf(candidate, candidateId) {
   const raw = String(candidate?.name ?? '').replace(/[^a-z0-9-]/g, '').toLowerCase();
   return raw || (candidateId ? `skill-${candidateId.slice(0, 6)}` : '');
@@ -133,7 +134,7 @@ export function apply(ctx, rawConfig) {
   const ledger = new EvolutionLedger(config.ledgerPath);
   mkdirSync(config.skillsDir, { recursive: true });
 
-  /** 自定义 OpenAI 兼容 provider（模型页 archive-models 配置，启用的第一个）。 */
+  /** 自定义 OpenAI 兼容 provider（模型页 archive-models 配置，启用的第一个；2026-08-30 与 loop 同语义）。 */
   function customLlmProvider() {
     try {
       const settings = ctx.get('settings');
@@ -143,9 +144,10 @@ export function apply(ctx, rawConfig) {
     } catch { return null; }
   }
 
-  /** 直呼 LLM（文本流）：自定义 provider 优先，失败回退官方。
-   *  deepseek-v4-flash 是推理模型：长输入/并发时会把答案写进 reasoning_content 而不输出
-   *  content，故 maxTokens 默认 4000（放大预算）并做 reasoning 兜底，防"LLM 未返回文本"。 */
+  /** 直呼 LLM（文本流）。自定义 provider 优先，失败回退官方（2026-08-30）。
+   *  2026-09-03-5 修复：maxTokens 默认提升至 4000 并同步 loop 的 reasoning 兜底——
+   *  deepseek-v4-flash 是推理模型，长输入/并发时会把答案写进 reasoning_content 而不输出
+   *  content（loop 2026-09-01-3 已同款修复，evolution 漏同步 → 手动触发建议必"LLM 未返回文本"）。 */
   async function callLlm(system, user, signal, maxTokens = 4000) {
     const custom = customLlmProvider();
     if (custom) {
@@ -162,7 +164,7 @@ export function apply(ctx, rawConfig) {
         const msg = j.choices?.[0]?.message;
         const text = String(msg?.content ?? '').trim();
         if (!text) {
-          // 推理模型正文为空 → reasoning_content 兜底（与官方路径/loop 一致）
+          // 2026-09-03-5：推理模型正文为空 → reasoning_content 兜底（与官方路径/loop 一致）
           const rt = String(msg?.reasoning_content ?? '').trim();
           if (rt) return rt;
           throw new Error('LLM 未返回文本');
@@ -172,7 +174,7 @@ export function apply(ctx, rawConfig) {
         logger.warn(`archive-evolution: 自定义提供商失败，回退官方：${error.message}`);
       }
     }
-    // 官方路径（空文本/流错误重试一次；正文空时 reasoning 兜底）
+    // 官方路径（2026-08-30 韧性补丁：与 loop 同款——空文本/流错误重试一次；2026-09-03-5 reasoning 兜底）
     let lastErr = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       let text = '';
@@ -188,7 +190,7 @@ export function apply(ctx, rawConfig) {
         });
         for await (const chunk of stream) {
           if (chunk.type === 'text-delta') text += chunk.text;
-          // 收集推理模型思考段——正文为空但 reasoning 含输出时兜底返回（与 loop 同款）
+          // 2026-09-03-5：收集推理模型思考段——正文为空但 reasoning 含输出时兜底返回（与 loop 同款）
           if (chunk.type === 'reasoning-delta') reasoning += chunk.text;
           if (chunk.type === 'finish' && (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted')) {
             const failure = chunk.reason.failure;
@@ -208,13 +210,13 @@ export function apply(ctx, rawConfig) {
     throw lastErr ?? new Error('LLM 未返回文本');
   }
 
-  /** 召回进化素材（分两路：对话素材→人格提炼；工作素材→skill 提炼）。
+  /** 召回进化素材（2026-08-31 分两路：对话素材→人格提炼；工作素材→skill 提炼）。
    *  @returns {{conversation:string[], work:string[]}} 各上限 8 条、每条 ≤200 字。 */
   async function recallMaterial() {
     const conversation = [];
     const work = [];
-    // 每条素材前缀真实时间（[MM-DD HH:MM]）：记忆若不带时间，LLM 可能当成"最近/刚发生"
-    // （防误判）；去重按原文尾匹配（前缀不影响）。
+    // 2026-09-03-6：每条素材前缀真实时间（[MM-DD HH:MM]），保证 AI 读到的每条记忆都标注时间防误判
+    // （旧对话/旧决策若不带时间，LLM 可能当成"最近/刚发生"）。去重按原文尾匹配（前缀不影响）。
     const push = (list, c, at) => {
       const t = String(c ?? '').trim();
       if (!t) return;
@@ -265,13 +267,13 @@ export function apply(ctx, rawConfig) {
     return `${c.type ?? ''}|${c.refineId ?? ''}|${normText(c.content)}`;
   }
 
-  /** 代码层去重：与账本最近 suggest 完全一致则剔除（refine 感知：refineId 不同不算重复）。 */
+  /** 代码层去重：与账本最近 suggest 完全一致则剔除（2026-08-31；09-02 refine 感知）。 */
   function dedupeCandidates(candidates, window = 30) {
     const prev = new Set(ledger.all(400).filter((r) => r.type === 'suggest').map((r) => dedupeKey(r.candidate ?? {})));
     return candidates.filter((c) => !prev.has(dedupeKey(c)));
   }
 
-  /** 解析 skill 通道 JSON 候选（人格已拆独立 YAML 通道，此处仅技能类）。 */
+  /** 解析 skill 通道 JSON 候选（2026-09-02：人格已拆独立 YAML 通道，此处仅技能类）。 */
   function parseCandidates(text) {
     const matched = String(text).match(/\[[\s\S]*\]/);
     if (!matched) throw new Error('候选输出未包含 JSON 数组');
@@ -295,7 +297,7 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
-   * 人格更新方案独立通道：近 24h 对话（★重点标记要求/建议类）+ 人格发展轨迹
+   * 人格更新方案独立通道（2026-09-02）：近 24h 对话（★重点标记要求/建议类）+ 人格发展轨迹
    * （当前人格清单含 id / 已采纳进化方向 / 一致性近期回复轨迹）→ LLM 输出严格 YAML
    * （persona_updates，add/refine）→ 零依赖子集解析 → 映射 persona-add / persona-refine 候选。
    * @returns {{candidates:Array<object>, skipped:string|null}}
@@ -313,7 +315,7 @@ export function apply(ctx, rawConfig) {
     let lastErr = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const text = await callLlm(system, user, signal, 8000); // 推理模型预算放大（上限，实际按输出计费）
+        const text = await callLlm(system, user, signal, 8000); // 2026-09-03-5：推理模型预算放大（上限，实际按输出计费）
         plan = parsePersonaPlan(text, context.sections);
         break;
       } catch (error) {
@@ -332,7 +334,7 @@ export function apply(ctx, rawConfig) {
     return { candidates, skipped: null };
   }
 
-  /** skill 通道：对话/工作素材 JSON 提炼（LLM 偶发非 JSON 时重试一次）。 */
+  /** skill 通道：对话/工作素材 JSON 提炼（维持原流程；LLM 偶发非 JSON 重试一次）。 */
   async function runSkillChannel({ material, recent, personaText, signal }) {
     const user = SUGGEST_USER(material, recent, personaText);
     let candidates = null;
@@ -369,7 +371,7 @@ export function apply(ctx, rawConfig) {
       const stats = ctx.persona.stats();
       before.personaVersion = stats.version;
       if (candidate.type === 'persona-refine') {
-        // 人格修正（refine）：重写既有条目内容（可带 importance）；版本级回滚复用
+        // 2026-09-02：人格修正（refine）——重写既有条目内容（可带 importance）；版本级回滚复用
         const full = (() => { try { return ctx.persona.get?.() ?? null; } catch { return null; } })();
         let target = null;
         for (const sec of Object.keys(full?.sections ?? {})) {
@@ -405,13 +407,14 @@ export function apply(ctx, rawConfig) {
       const file = join(dir, 'SKILL.md');
       before.content = existsSync(file) ? readFileSync(file, 'utf8') : null;
       mkdirSync(dir, { recursive: true });
-      // 原子写（tmp+rename，防强杀/断电半截损坏 SKILL.md）
+      // 2026-08-31 审计修复：原子写（tmp+rename，防强杀/断电半截损坏 SKILL.md）
       const tmp = `${file}.tmp-${process.pid}`;
       writeFileSync(tmp, candidate.content, 'utf8');
       renameSync(tmp, file);
-      // runtime 挂载（尽力；正文加载由 provider 决定，文件为持久权威）。
-      // 注册必须带 content=SKILL.md 正文：宿主 dsh-skill 对 runtime 技能走 validateDefinition，
-      // 强制 content 为 string；缺 content 时 agent 加载该技能即抛 "content must be a string"（不可用）。
+      // runtime 挂载（尽力；正文加载由 provider 决定，文件为持久权威）
+      // 2026-09-07 审计修复：注册必须带 content=SKILL.md 正文——宿主 dsh-skill 的 get() 对 runtime
+      // 技能走 validateDefinition，强制 content 为 string；此前只传 name/description/… 缺 content，
+      // agent 一旦加载该技能即抛 "content must be a string"（技能被采纳后不可用）。
       try {
         ctx.skills.register({
           name,
@@ -429,15 +432,15 @@ export function apply(ctx, rawConfig) {
     throw new Error(`不支持的候选类型：${candidate.type}`);
   }
 
-  /** 人格一键凝练：最近一次"预览"生成的方案（token 授权 + 30 分钟有效）。
+  /** 人格一键凝练（2026-09-08）：最近一次"预览"生成的方案（token 授权 + 30 分钟有效）。
    *  应用前须校验 persona 版本未变（防预览后用户又改了人格被整体覆盖）。 */
   let pendingDistill = null;
 
   const api = {
     /** 生成候选并隔离评估（不生效）。@returns {{candidateId, candidates, decisions}} */
     async suggest({ by = 'evolution' } = {}) {
-      // LLM 调用挂起时防"触发建议"永久卡住 → 120s 整体超时
-      // （覆盖人格/技能两次生成 + 逐候选评估）
+      // 韧性补丁：LLM 调用 signal=undefined 时 API/端点挂起会让"触发建议"永久卡住 → 120s 整体超时
+      // （2026-09-02 拆"人格 YAML + skill JSON"双通道后由 60s 提至 120s，覆盖两次生成+逐候选评估）
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 120000);
       try {
@@ -446,21 +449,21 @@ export function apply(ctx, rawConfig) {
         const recent = recentCandidates(12);
         const channelErrors = [];
         let candidates = [];
-        // 人格通道（近 24h 对话 + 人格发展轨迹 → 严格 YAML → add/refine 候选）
+        // 人格通道（2026-09-02 新流程：近 24h 对话 + 人格发展轨迹 → 严格 YAML → add/refine 候选）
         try {
           const p = await runPersonaChannel({ recent, signal: ac.signal });
           candidates.push(...p.candidates);
         } catch (error) {
           channelErrors.push(`人格通道：${error.message}`);
         }
-        // skill 通道（对话/工作素材 JSON 提炼，仅技能类）
+        // skill 通道（沿用原对话/工作素材 JSON 提炼，仅技能类）
         try {
           const s = await runSkillChannel({ material, recent, personaText, signal: ac.signal });
           candidates.push(...s);
         } catch (error) {
           channelErrors.push(`skill 通道：${error.message}`);
         }
-        candidates = dedupeCandidates(candidates); // 代码层重复抑制
+        candidates = dedupeCandidates(candidates); // 2026-08-31/09-02 代码层重复抑制
         if (candidates.length === 0) {
           if (channelErrors.length > 0) throw new Error(`候选生成失败：${channelErrors.join('；')}`);
           throw new Error('未生成有效候选（素材不足或与近期候选重复）');
@@ -472,7 +475,7 @@ export function apply(ctx, rawConfig) {
           let evaluation = null;
           let decision = null;
           try {
-            const evalText = await callLlm(EVALUATION_PROTOCOL, `候选：${JSON.stringify(candidate)}\n当前人格：\n${personaText}`, ac.signal, 2000); // 评估同样预留 reasoning 预算
+            const evalText = await callLlm(EVALUATION_PROTOCOL, `候选：${JSON.stringify(candidate)}\n当前人格：\n${personaText}`, ac.signal, 2000); // 2026-09-03-5：评估同样预留 reasoning 预算
             evaluation = parseEvaluation(evalText);
           } catch (error) {
             logger.warn(`archive-evolution: 评估失败（${id.slice(0, 8)}）：${error.message}，以规则门控为准`);
@@ -494,8 +497,8 @@ export function apply(ctx, rawConfig) {
       try {
         const outcome = await applyCandidate(found.candidate, candidateId);
         ledger.record({ type: 'approve', candidateId, candidate: found.candidate, status: 'applied', before: outcome.before, after: outcome.after, by });
-        // 一致性协同统一在服务层发射（agent 工具/autoApply/RPC 全路径覆盖；
-        // control RPC 不再手动调用，避免双触发重复入轨）
+        // 2026-08-31 审计修复：一致性协同统一在服务层发射（agent 工具/autoApply/RPC 全路径覆盖；
+        // control RPC 的手动调用已删除，避免双触发重复入轨）
         try { const c = ctx.get('consistency'); if (c && typeof c.onEvolutionApproved === 'function') void c.onEvolutionApproved(candidateId).catch(() => {}); } catch { /* 协同失败不阻断采纳 */ }
         return { applied: true, status: 'applied', outcome };
       } catch (error) {
@@ -505,7 +508,7 @@ export function apply(ctx, rawConfig) {
     },
 
     /**
-     * 潜意识系统：导入一条外部生成的进化草案入账（进入待审批队列）。
+     * 2026-08-31 潜意识系统：导入一条外部生成的进化草案入账（进入待审批队列）。
      * @param {{type:string, section?:string, name?:string, content:string, rationale?:string, evidence?:string}} candidate
      * @param {string} by 来源标记（如 'dream' 灵感进化）
      * @returns {{candidateId:string, priority:'high'}}
@@ -523,11 +526,11 @@ export function apply(ctx, rawConfig) {
         evidence: String(candidate.evidence ?? '').slice(0, 300),
       };
       if (!norm.content) throw new Error('候选 content 必填');
-      // persona-add 的 section 必须是六人格分区之一（非法 section 必然应用失败）
+      // 2026-08-31 审计修复：persona-add 的 section 必须是六人格分区之一（非法 section 必然应用失败）
       if (norm.type === 'persona-add' && !['identity', 'values', 'traits', 'style', 'directives', 'capabilities'].includes(norm.section)) {
         throw new Error(`非法 persona 分区：${norm.section || '(空)'}`);
       }
-      // 导入草案也过确定性安全门（BLOCKED_PATTERNS 零成本规则门控）
+      // 2026-08-31 审计修复（major）：导入草案也过确定性安全门（BLOCKED_PATTERNS 零成本规则门控）
       const rules = safetyRules(norm);
       if (!rules.safe) throw new Error(`安全规则拦截：${rules.blocked.join(',')}`);
       const { id } = ledger.record({ type: 'suggest', candidate: norm, by: String(by).slice(0, 20), status: 'pending', priority: 'high' });
@@ -535,7 +538,7 @@ export function apply(ctx, rawConfig) {
     },
 
     /**
-     * 潜意识系统"自动微调"：跳过用户确认直接应用（仅 persona-add 类；skill 类涉写文件
+     * 2026-08-31 潜意识系统"自动微调"：跳过用户确认直接应用（仅 persona-add 类；skill 类涉写文件
      * 即使开启也拒绝自动执行）。账本记 type='auto-apply'，自进化页单列「灵感进化」，保留回滚。
      */
     async autoApply(candidateId, { by = 'dream' } = {}) {
@@ -545,7 +548,7 @@ export function apply(ctx, rawConfig) {
       if (found.candidate.type !== 'persona-add') {
         throw new Error('自动微调仅支持 persona-add 类（skill 类涉及写文件，须人工审批）');
       }
-      // 自动执行前强制过确定性安全门（不依赖 LLM 的最后防线）
+      // 2026-08-31 审计修复（major）：自动执行前强制过确定性安全门（不依赖 LLM 的最后防线）
       const rules = safetyRules(found.candidate);
       if (!rules.safe) {
         ledger.record({ type: 'fail', candidateId, candidate: found.candidate, status: 'failed', error: `安全规则拦截：${rules.blocked.join(',')}`, by });
@@ -554,7 +557,7 @@ export function apply(ctx, rawConfig) {
       try {
         const outcome = await applyCandidate(found.candidate, candidateId);
         ledger.record({ type: 'auto-apply', candidateId, candidate: found.candidate, status: 'applied', before: outcome.before, after: outcome.after, by });
-        // 自动微调同样接入一致性协同（航点/β/倒叙修正）
+        // 2026-08-31 审计修复：自动微调同样接入一致性协同（航点/β/倒叙修正）
         try { const c = ctx.get('consistency'); if (c && typeof c.onEvolutionApproved === 'function') void c.onEvolutionApproved(candidateId).catch(() => {}); } catch { /* 协同失败不阻断 */ }
         return { applied: true, status: 'applied', auto: true, outcome };
       } catch (error) {
@@ -577,7 +580,7 @@ export function apply(ctx, rawConfig) {
       if (confirm !== true) throw new Error('回滚须用户显式确认：请传 confirm=true');
       const found = findCandidate(candidateId);
       if (!found) throw new Error(`候选不存在：${candidateId}`);
-      // ①回滚匹配 approve 与 auto-apply 两类采纳记录（auto-apply 采纳的候选也可回滚）；
+      // 2026-08-31 审计修复：①匹配 auto-apply 采纳（潜意识自动微调采纳的候选此前无法回滚——major）；
       // ②状态守卫：仅 applied 可回滚（防重复回滚抹掉期间新增人格条目）
       if (found.status !== 'applied') throw new Error(`候选状态为 ${found.status}，仅已采纳可回滚`);
       const apply = found.records.find((r) => r.type === 'approve' || r.type === 'auto-apply');
@@ -586,7 +589,7 @@ export function apply(ctx, rawConfig) {
       if (c.type === 'persona-add' || c.type === 'persona-refine') {
         const v = apply.before?.personaVersion;
         if (v === undefined) throw new Error('缺少采纳前人格版本，无法回滚');
-        // persona.rollback 返回 {rolledBack} 包装对象：须以 rolledBack===true 判断成败（勿用 !res）
+        // 2026-08-30 修复：persona.rollback 返回 {rolledBack} 包装对象，此前 `if (!ok)` 恒真 → 回滚失败也记录成功
         const res = ctx.persona.rollback(v, by);
         if (!res || res.rolledBack !== true) throw new Error(`回滚到人格版本 ${v} 失败`);
         ledger.record({ type: 'rollback', candidateId, candidate: c, status: 'rolled-back', to: { personaVersion: v }, by });
@@ -597,7 +600,7 @@ export function apply(ctx, rawConfig) {
         const beforeContent = apply.before?.content;
         const file = name ? join(config.skillsDir, name, 'SKILL.md') : null;
         if (file && beforeContent != null) {
-          // 原子写（tmp+rename，防强杀半截损坏）
+          // 2026-08-31 审计修复：原子写（tmp+rename，防强杀半截损坏）
           const tmp = `${file}.tmp-${process.pid}`;
           writeFileSync(tmp, beforeContent, 'utf8');
           renameSync(tmp, file);
@@ -610,7 +613,7 @@ export function apply(ctx, rawConfig) {
       throw new Error(`不支持的候选类型：${c.type}`);
     },
 
-    // ================= 人格一键凝练（人格页手动触发，无损整理） =================
+    // ================= 人格一键凝练（2026-09-08：人格页手动触发，无损整理） =================
     // 流程：全量条目打包 → LLM 严格 YAML 重写（按六分区归类、合并相同/相似、merged_from 覆盖
     // 校验防信息丢失）→ 预览（不生效，token 留 30 分钟）→ 用户确认 → persona.replace 整体重建
     // （版本+1、账本留完整旧快照，可随时回滚）。未走进化账本（非候选，属人格维护工具）。
@@ -732,7 +735,8 @@ export function apply(ctx, rawConfig) {
     },
 
     stats() {
-      // 单次遍历折叠每个候选的最新状态（records 为 new→old，首个非 suggest 记录即最新）
+      // 2026-08-30 审计修复：此前对每条 suggest 调 ledger.statusOf → 每次全量读盘解析（O(n²)）；
+      // 改为单次遍历折叠每个候选的最新状态（records 为 new→old，首个非 suggest 记录即最新）。
       const records = ledger.all(500);
       const latestByCandidate = new Map();
       for (const r of records) {
@@ -755,9 +759,9 @@ export function apply(ctx, rawConfig) {
   };
   ctx.provide('evolution', api);
 
-  // ================= 自动建议（每日定期生成进化候选） =================
+  // ================= 自动建议（2026-08-31 用户需求"定期提供进化候选"） =================
   // 每日 autoHour 自动 suggest（by='auto'）：仅生成候选 + 隔离评估 + 留档 pending，绝不自动采纳；
-  // 生成 ≥1 条新候选时经 notify 主动告知。手动 suggest 与自动并存。
+  // 生成 ≥1 条新候选时经 notify 主动告知（用户确认：主动通知）。手动 suggest 与自动并存。
   const autoState = { enabled: config.autoSuggest, autoHour: config.autoHour, autoNotify: config.autoNotify, lastAutoAt: 0, nextAutoAt: 0, autoTotal: 0, lastError: null };
   let nextAutoAt = 0;
   let autoRunning = false;
@@ -851,8 +855,8 @@ export function apply(ctx, rawConfig) {
         properties: { applied: { type: 'boolean', required: true }, status: { type: 'string', required: true } },
       }),
       async execute(args) {
-        // approve 返回含 outcome 而 schema 仅声明 applied/status（多余字段触发 INVALID_TOOL_OUTPUT）；
-        // 执行结果裁剪到 schema 声明字段。
+        // 2026-08-30 审计修复：approve 返回含 outcome 而 schema 仅声明 applied/status →
+        // INVALID_TOOL_OUTPUT（历史教训#1 高危模式）；执行结果裁剪到 schema 声明字段。
         const r = await api.approve(args.candidateId, { by: 'user', confirm: args.confirm });
         return { applied: r.applied, status: r.status };
       },

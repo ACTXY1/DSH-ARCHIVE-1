@@ -1,4 +1,4 @@
-﻿# DSH-ARCHIVE stop script: stop the webui listening on the project port.
+# DSH-ARCHIVE stop script: stop the webui listening on the project port.
 # Usage: powershell -File stop.ps1            (default port 3081)
 #        powershell -File stop.ps1 -Port 3081
 # Note: kept pure ASCII (no BOM) so PS 5.1 reads it safely in any codepage.
@@ -35,7 +35,7 @@ if ($found.Count -eq 0) {
   Write-Host "No process listening on port $Port (already stopped)."
 } else {
   foreach ($p in $found) {
-    # Verify the listener is really a node process (dsh runs on node)
+    # 2026-09-04 fix: verify the listener is really a node process (dsh runs on node)
     # before killing, mirroring the ollama/tray process-name checks below - prevents
     # killing an unrelated service that happens to occupy the port.
     $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
@@ -54,7 +54,7 @@ $ollamaPidFile = Join-Path (Split-Path $MyInvocation.MyCommand.Definition -Paren
 if (Test-Path $ollamaPidFile) {
   $opid = Get-Content $ollamaPidFile -ErrorAction SilentlyContinue
   if ($opid -match '^\d+$') {
-    # 进程名校验（与 tray 路径一致）：PID 文件可能过期、PID 被系统复用时
+    # 2026-08-30 审计修复：进程名校验（与 tray 路径一致）——PID 文件可能过期、PID 被系统复用时
     # 避免 taskkill 误杀无关进程；校验不通过时打印 WARN 而非静默。
     $op = Get-Process -Id ([int]$opid) -ErrorAction SilentlyContinue
     if ($op -and $op.ProcessName -match '^ollama') {
@@ -69,6 +69,7 @@ if (Test-Path $ollamaPidFile) {
 
 # Stop the tray resident (tray.pid written by tray.ps1 as two lines: PID / process name).
 # Both file-name and live-process-name checks guard against PID reuse.
+# Note: legacy tray instances started before v2 (no pid file) were cleaned up once manually.
 $trayPidFile = Join-Path (Split-Path $MyInvocation.MyCommand.Definition -Parent) 'dsh\data\tray.pid'
 if (Test-Path $trayPidFile) {
   $trayLines = @(Get-Content $trayPidFile -ErrorAction SilentlyContinue)
@@ -90,7 +91,7 @@ if (Test-Port $Port) {
   Get-Process node -ErrorAction SilentlyContinue | Select-Object Id, StartTime | Format-Table -AutoSize | Out-String | Write-Host
   exit 1
 } else {
-  # Remove the PID file so the next start can launch (single-instance guard).
+  # 2026-08-31 single-instance guard: remove the PID file so the next start can launch.
   $pidFile = Join-Path (Split-Path $MyInvocation.MyCommand.Definition -Parent) 'dsh\data\dsh.pid'
   Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
   Write-Host "SUCCESS: DSH-ARCHIVE webui stopped (port $Port released)."
