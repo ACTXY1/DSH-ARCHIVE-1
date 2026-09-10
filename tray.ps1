@@ -1,4 +1,4 @@
-# DSH-ARCHIVE 系统托盘常驻（2026-08-30 v3）
+﻿# DSH-ARCHIVE 系统托盘常驻（2026-08-30 v3）
 # 用法：由 start.ps1 自动启动；或手动 powershell -File tray.ps1
 # 功能：左键单击打开控制台；右键菜单 = 打开/重启/停止服务、退出托盘。
 # v3 变更：PID 文件写入提前到 Add-Type 之前（消除"托盘未就绪时关闭按钮错过清理"的竞态）。
@@ -12,6 +12,16 @@ $stopScript = Join-Path $root 'stop.ps1'
 $startScript = Join-Path $root 'start.ps1'
 $dataDir = Join-Path $root 'dsh\data'
 $pidFile = Join-Path $dataDir 'tray.pid'
+# 2026-09-11：新版 dsh web（≥0.1.2）带浏览器鉴权，需打开 start.ps1 写入 dsh\data\web.url 的
+# 带 token 地址（首次访问签发 Cookie 后普通地址亦可）；旧版 dsh 无该文件则回落纯地址。
+$urlFile = Join-Path $dataDir 'web.url'
+function Get-ConsoleUrl {
+  try {
+    $u = Get-Content $urlFile -TotalCount 1 -ErrorAction Stop
+    if ($u -and $u.Trim()) { return $u.Trim() }
+  } catch { }
+  return $url
+}
 
 # --- 幂等：已有托盘实例则直接退出 ---
 $mutex = New-Object System.Threading.Mutex($false, 'DSH-ARCHIVE-Tray-3081')
@@ -53,7 +63,7 @@ $tray.Icon = $icon
 $tray.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$openItem = $menu.Items.Add('打开控制台', $null, { param($s, $e) [void][System.Diagnostics.Process]::Start($url) })
+$openItem = $menu.Items.Add('打开控制台', $null, { param($s, $e) [void][System.Diagnostics.Process]::Start((Get-ConsoleUrl)) })
 $restartItem = $menu.Items.Add('重启服务', $null, {
   param($s, $e)
   Start-Process powershell -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
@@ -75,7 +85,7 @@ $tray.ContextMenuStrip = $menu
 $tray.Add_MouseClick({
   param($s, $e)
   if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
-    [void][System.Diagnostics.Process]::Start($url)
+    [void][System.Diagnostics.Process]::Start((Get-ConsoleUrl))
   }
 })
 

@@ -24,6 +24,42 @@ function Test-Port([int]$p) {
   } catch { return $false }
 }
 
+# 2026-09-11：新版 dsh web（≥0.1.2）引入浏览器鉴权——dsh 启动时把带进程令牌的地址打印为
+# "dsh web: http://127.0.0.1:PORT/?token=..."（archive.log）；裸开 http://127.0.0.1:PORT 会返回
+# "dsh web authentication required"。这里解析日志中的该地址并持久化到 dsh\data\web.url
+# （托盘/二次打开复用；首次访问签发 Cookie 后普通地址亦可访问）；旧版 dsh 无此行则回落纯地址。
+function Get-WebUrl {
+  $plain = "http://127.0.0.1:$port"
+  $urlFile = Join-Path $dshDir 'data\web.url'
+  try {
+    if (Test-Path $log) {
+      $m = [regex]::Match([System.IO.File]::ReadAllText($log), 'dsh web:\s*(http://[^\s`"]+)')
+      if ($m.Success -and $m.Groups[1].Value) {
+        $u = $m.Groups[1].Value.Trim()
+        try {
+          New-Item -ItemType Directory -Force -Path (Split-Path $urlFile -Parent) | Out-Null
+          Set-Content -Path $urlFile -Value $u -Encoding ascii
+        } catch { }
+        return $u
+      }
+    }
+    if (Test-Path $urlFile) {
+      $saved = Get-Content $urlFile -TotalCount 1 -ErrorAction SilentlyContinue
+      if ($saved -and $saved.Trim()) { return $saved.Trim() }
+    }
+  } catch { }
+  return $plain
+}
+# 打开控制台（新版 dsh 用带 token 的地址；URL 尚未打印时稍候重读一次再打开）
+function Open-Console {
+  $u = Get-WebUrl
+  if ($u -eq "http://127.0.0.1:$port") { Start-Sleep -Seconds 3; $u = Get-WebUrl }
+  if ($u) {
+    Write-Host "[start] open $u" -ForegroundColor Green
+    if (-not $NoOpen) { Start-Process $u }
+  }
+}
+
 # System tray resident (2026-08-30 v2): tray.ps1 itself is idempotent (mutex).
 function Start-Tray {
   $trayScript = Join-Path $root 'tray.ps1'
@@ -300,8 +336,7 @@ if ($runningPids.Count -gt 0) {
   Write-Host '[start] To restart: run stop.ps1 first (or tray right-click Stop), then start again.' -ForegroundColor Yellow
   # Already running: still ensure the tray exists (tray.ps1 is idempotent).
   Start-Tray
-  Write-Host "[start] open http://127.0.0.1:$port"
-  if (-not $NoOpen) { Start-Process "http://127.0.0.1:$port" }
+  Open-Console
   exit 0
 }
 
@@ -341,7 +376,7 @@ if ($ready) {
   # System tray resident (2026-08-30 v2: tray.ps1 idempotent, keeps a single instance).
   Start-Tray
   Write-Host "[start] SUCCESS: http://127.0.0.1:$port" -ForegroundColor Green
-  if (-not $NoOpen) { Start-Sleep -Seconds 2; Start-Process "http://127.0.0.1:$port" }
+  Open-Console
 } else {
   Write-Host "[start] not ready in 30s; see log: $log" -ForegroundColor Yellow
   if (Test-Path $log) { Get-Content $log -Tail 20 }

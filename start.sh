@@ -140,7 +140,11 @@ for _ in $(seq 1 30); do
   if test_port "$PORT"; then ready=1; break; fi
 done
 if [ "$ready" -eq 1 ]; then
-  log "SUCCESS: http://127.0.0.1:$PORT"
+  # 2026-09-11：新版 dsh web（≥0.1.2）带浏览器鉴权，需打开 dsh 打印的带 token 地址
+  # （形如 "dsh web: http://127.0.0.1:3081/?token=..."，在 $LOG）；旧版无此行则回落纯地址。
+  web_url="$(grep -oE 'dsh web:[[:space:]]*http://[^ ]+' "$LOG" 2>/dev/null | tail -n1 | sed -E 's/^dsh web:[[:space:]]*//')"
+  if [ -z "$web_url" ]; then web_url="http://127.0.0.1:$PORT"; fi
+  log "SUCCESS: $web_url"
 else
   warn '60 秒内未就绪，日志末尾：'
   tail -n 20 "$LOG" 2>/dev/null
