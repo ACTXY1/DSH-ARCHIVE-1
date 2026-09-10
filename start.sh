@@ -37,7 +37,7 @@ echo '============================================'
 echo '  DSH-ARCHIVE 手机版启动'
 echo '============================================'
 
-# ---------------- 1. 环境检查（2026-09-11 独立化：项目自带引擎 + 项目 home） ----------------
+# ---------------- 1. 环境检查（2026-09-10 独立化：项目自带引擎 + 项目 home） ----------------
 PROJ_HOME="$INSTALL_DIR/.dsh-home"
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 if [ ! -f "$ENGINE_BIN" ]; then
@@ -56,7 +56,7 @@ if [ ! -e "$PROFILE_LINK" ]; then
 fi
 # 防御：profile 必须指向【本副本】的 dsh。手机重装/复制到新目录后链接若仍指旧目录，
 # 启动会读到旧(或另一份空白)副本的 dsh/data——对话记录与模型提供商配置会显示"被重置"。
-# 2026-09-11 起链接固定在各自项目 home 内，天然互不干扰；此处仍做一致性校验。
+# 2026-09-10 起链接固定在各自项目 home 内，天然互不干扰；此处仍做一致性校验。
 PROFILE_TARGET="$(readlink -f "$PROFILE_LINK" 2>/dev/null || true)"
 DASH_REAL="$(cd "$DASH_DIR" && pwd)"
 if [ -n "$PROFILE_TARGET" ] && [ "$PROFILE_TARGET" != "$DASH_REAL" ]; then
@@ -151,7 +151,7 @@ for _ in $(seq 1 30); do
   if test_port "$PORT"; then ready=1; break; fi
 done
 if [ "$ready" -eq 1 ]; then
-  # 2026-09-11：新版 dsh web（≥0.1.2）带浏览器鉴权，需打开 dsh 打印的带 token 地址
+  # 2026-09-10：新版 dsh web（≥0.1.2）带浏览器鉴权，需打开 dsh 打印的带 token 地址
   # （形如 "dsh web: http://127.0.0.1:3081/?token=..."，在 $LOG）；旧版无此行则回落纯地址。
   web_url="$(grep -oE 'dsh web:[[:space:]]*http://[^ ]+' "$LOG" 2>/dev/null | tail -n1 | sed -E 's/^dsh web:[[:space:]]*//')"
   if [ -z "$web_url" ]; then web_url="http://127.0.0.1:$PORT"; fi

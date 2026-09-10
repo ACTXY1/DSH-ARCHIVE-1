@@ -203,7 +203,7 @@ else
   log "已重写 $changed 个文件中的旧路径 -> $INSTALL_DIR"
 fi
 
-# ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段；2026-09-11 独立化） ----------------
+# ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段；2026-09-10 独立化） ----------------
 PROJ_HOME="$INSTALL_DIR/.dsh-home"
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 export DSH_HOME="$PROJ_HOME"

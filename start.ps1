@@ -24,7 +24,7 @@ function Test-Port([int]$p) {
   } catch { return $false }
 }
 
-# 2026-09-11：新版 dsh web（≥0.1.2）引入浏览器鉴权——dsh 启动时把带进程令牌的地址打印为
+# 2026-09-10：新版 dsh web（≥0.1.2）引入浏览器鉴权——dsh 启动时把带进程令牌的地址打印为
 # "dsh web: http://127.0.0.1:PORT/?token=..."（archive.log）；裸开 http://127.0.0.1:PORT 会返回
 # "dsh web authentication required"。这里解析日志中的该地址并持久化到 dsh\data\web.url
 # （托盘/二次打开复用；首次访问签发 Cookie 后普通地址亦可访问）；旧版 dsh 无此行则回落纯地址。
@@ -73,7 +73,7 @@ Write-Host '=============================='
 Write-Host '  DSH-ARCHIVE one-click start'
 Write-Host '=============================='
 
-# 1) 环境检查（2026-09-11 独立化）：使用项目自带的 dsh 引擎，不再依赖全局 dsh 命令
+# 1) 环境检查（2026-09-10 独立化）：使用项目自带的 dsh 引擎，不再依赖全局 dsh 命令
 $projHome  = Join-Path $root '.dsh-home'
 $engineBin = Join-Path $dshDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
 if (-not (Test-Path $engineBin)) {
@@ -82,7 +82,7 @@ if (-not (Test-Path $engineBin)) {
   exit 1
 }
 
-# 1.5) 项目内 profile 入口（2026-09-11 独立化）：入口一律位于项目 home 内
+# 1.5) 项目内 profile 入口（2026-09-10 独立化）：入口一律位于项目 home 内
 #      （<项目>\.dsh-home\profiles\archive -> <项目>\dsh），不再使用 ~/.dsh——也就不存在
 #      "多副本共用全局入口被互相覆盖"的问题；缺失/指向错误时本脚本直接创建或修正。
 #      另做数据路径自检：cordis.patch.yml 的数据路径必须全部落在本副本 dsh\data，
@@ -129,7 +129,7 @@ if (Test-Path -LiteralPath $legacyHome) {
 if (Test-Path $junction) {
   $jit = Get-Item $junction -Force -ErrorAction SilentlyContinue
   if (($null -eq $jit) -or ($jit.LinkType -ne 'Junction')) {
-    # 2026-09-11：文件夹被"复制"后，链接可能变成真实目录（复制工具解引用）——home 属运行时可再生
+    # 2026-09-10：文件夹被"复制"后，链接可能变成真实目录（复制工具解引用）——home 属运行时可再生
     # 产物（不含用户数据），这里直接移除并重建为链接，实现复制善后自愈。
     Write-Host "[start] profile 入口是真实目录（疑似复制所致），自动重建为链接..." -ForegroundColor Yellow
     & cmd /c rmdir /s /q "`"$junction`"" 2>$null | Out-Null
@@ -209,7 +209,7 @@ if ($strayValues.Count -gt 0) {
   Write-Host '[start] 环境自检通过（项目内引擎 + 项目内 profile 入口 + 数据路径一致）。' -ForegroundColor Green
 }
 
-# 1.6) 项目 home 的 agent preset（2026-09-11 独立化）：preset 的加载位置由 DSH_HOME 决定，
+# 1.6) 项目 home 的 agent preset（2026-09-10 独立化）：preset 的加载位置由 DSH_HOME 决定，
 #      必须在引擎启动前就位，否则主会话会因 "preset archive-standard not found" 而 resume 失败
 #      （既有安装从 ~/.dsh 迁移过来时尤其重要）。幂等：仅缺失时复制，不覆盖已有内容。
 $presetSrc = Join-Path $root 'presets\archive-standard'
@@ -366,7 +366,7 @@ if (Test-Path $log) {
 #       once by this script unless -NoOpen.
 # Log encoding (2026-08-30 fix): redirect via cmd /c - cmd writes bytes as-is, so dsh
 #       UTF-8 output lands verbatim; PS 5.1 *>> would transcode to ANSI/GBK and garble it.
-# 2026-09-11 独立化：启动【项目自带引擎】（node <项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js），
+# 2026-09-10 独立化：启动【项目自带引擎】（node <项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js），
 #       并通过 cmd set 只在本次子进程内注入 DSH_HOME=<项目>\.dsh-home —— 全局 dsh 与 ~/.dsh
 #       的任意改动都不参与本项目运行（原 DSH 升级/卸载/家目录清理均无影响）。
 Write-Host "[start] starting control UI at http://127.0.0.1:$port (log: $log)"

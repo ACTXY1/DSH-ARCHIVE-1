@@ -349,7 +349,7 @@ try {
     }
 
     # ---------- 9. agent preset 强制同步（fix 的"存在即跳过"在更新场景不够） ----------
-    # 2026-09-11 独立化：preset 目标改为【项目 home】内的 .agent-presets（不再写 ~/.dsh）。
+    # 2026-09-10 独立化：preset 目标改为【项目 home】内的 .agent-presets（不再写 ~/.dsh）。
     $presetSrc = Join-Path $root 'presets\archive-standard'
     if (Test-Path $presetSrc) {
         $presetDst = Join-Path $root '.dsh-home\.agent-presets\archive-standard'

@@ -27,7 +27,7 @@ else
   no 'Node.js >= 22.5（当前缺失或过低）'
 fi
 
-# 2. 项目自带 dsh 引擎（2026-09-11 独立化：不再要求全局 dsh CLI）
+# 2. 项目自带 dsh 引擎（2026-09-10 独立化：不再要求全局 dsh CLI）
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 if [ -f "$ENGINE_BIN" ]; then
   ok "项目 dsh 引擎 $(node "$ENGINE_BIN" --version 2>/dev/null | head -n1)"

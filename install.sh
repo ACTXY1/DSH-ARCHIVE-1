@@ -50,7 +50,7 @@ ok "Node.js $(node -v)"
 need npm || die '未找到 npm（Node.js 应自带）'
 need pnpm || { log '未找到 pnpm，正在安装...'; npm install -g pnpm >/dev/null 2>&1 || die 'pnpm 安装失败'; }
 ok "pnpm $(pnpm --version 2>/dev/null)"
-# 项目自带 dsh 引擎（2026-09-11 独立化）：版本在 dsh/package.json 中精确锁定，随步骤 6 的
+# 项目自带 dsh 引擎（2026-09-10 独立化）：版本在 dsh/package.json 中精确锁定，随步骤 6 的
 # pnpm install 安装；此处仅报告——不再安装、也不再依赖全局 dsh CLI。
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 if [ -f "$ENGINE_BIN" ]; then

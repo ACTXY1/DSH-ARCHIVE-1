@@ -67,7 +67,7 @@ fi
 sleep 2
 if test_port "$PORT"; then
   warn "端口 $PORT 仍被监听——残留 dsh 进程："
-  # 2026-09-11 独立化后命令行形如 `node …/@deepseek-ai/dsh/lib/bin.js --profile archive …`，
+  # 2026-09-10 独立化后命令行形如 `node …/@deepseek-ai/dsh/lib/bin.js --profile archive …`，
   # 旧模式 'dsh --profile' 不再命中——统一按 --profile archive 匹配。
   pgrep -af -- '--profile archive' 2>/dev/null | head -n5
   exit 1
