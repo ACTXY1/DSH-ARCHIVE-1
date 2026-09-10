@@ -37,15 +37,26 @@ echo '============================================'
 echo '  DSH-ARCHIVE 手机版启动'
 echo '============================================'
 
-# ---------------- 1. 环境检查 ----------------
-need dsh || die '未找到 dsh 命令（请先运行 install.sh）'
-PROFILE_LINK="$HOME/.dsh/profiles/archive"
+# ---------------- 1. 环境检查（2026-09-11 独立化：项目自带引擎 + 项目 home） ----------------
+PROJ_HOME="$INSTALL_DIR/dsh/home"
+ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+if [ ! -f "$ENGINE_BIN" ]; then
+  die '未找到项目自带 dsh 引擎（dsh/node_modules/@deepseek-ai/dsh）——请先运行 bash install.sh 完成依赖安装'
+fi
+export DSH_HOME="$PROJ_HOME"    # 仅本进程及其子进程：profile/preset/tools 全在项目 home，与 ~/.dsh 隔离
+# preset 也必须先就位（其加载位置由 DSH_HOME 决定），否则主会话会因 preset 缺失而 resume 失败
+if [ -d "$INSTALL_DIR/presets/archive-standard" ] && [ ! -d "$PROJ_HOME/.agent-presets/archive-standard" ]; then
+  mkdir -p "$PROJ_HOME/.agent-presets"
+  cp -r "$INSTALL_DIR/presets/archive-standard" "$PROJ_HOME/.agent-presets/archive-standard" 2>/dev/null \
+    && log '已就位 agent preset 到项目 home'
+fi
+PROFILE_LINK="$PROJ_HOME/profiles/archive"
 if [ ! -e "$PROFILE_LINK" ]; then
   die 'archive profile 未挂载（请先运行 install.sh）'
 fi
-# 2026-09-05 防御：profile 必须指向【本副本】的 dsh。手机重装/复制到新目录后链接若仍指旧目录，
-# 启动会读到旧(或另一份空白)副本的 dsh/data——对话记录与模型提供商配置会显示"被重置"，
-# 真实数据其实在别的副本里（勿删任何副本）。此处不一致即拒绝启动。
+# 防御：profile 必须指向【本副本】的 dsh。手机重装/复制到新目录后链接若仍指旧目录，
+# 启动会读到旧(或另一份空白)副本的 dsh/data——对话记录与模型提供商配置会显示"被重置"。
+# 2026-09-11 起链接固定在各自项目 home 内，天然互不干扰；此处仍做一致性校验。
 PROFILE_TARGET="$(readlink -f "$PROFILE_LINK" 2>/dev/null || true)"
 DASH_REAL="$(cd "$DASH_DIR" && pwd)"
 if [ -n "$PROFILE_TARGET" ] && [ "$PROFILE_TARGET" != "$DASH_REAL" ]; then
@@ -128,7 +139,7 @@ fi
 # ---------------- 6. 启动 dsh webui ----------------
 log "启动控制界面 http://127.0.0.1:$PORT（日志: $LOG）"
 cd "$DASH_DIR" || die '无法进入 dsh 目录'
-nohup dsh --profile archive --port "$PORT" --no-open >> "$LOG" 2>&1 &
+nohup node "$ENGINE_BIN" --profile archive --port "$PORT" --no-open >> "$LOG" 2>&1 &
 DSH_PID=$!
 echo "$DSH_PID" > "$DSH_PID_FILE"
 log "dsh 已启动（PID $DSH_PID）"

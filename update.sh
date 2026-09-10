@@ -187,7 +187,10 @@ else
   log "已重写 $changed 个文件中的旧路径 -> $INSTALL_DIR"
 fi
 
-# ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段） ----------------
+# ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段；2026-09-11 独立化） ----------------
+PROJ_HOME="$INSTALL_DIR/dsh/home"
+ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+export DSH_HOME="$PROJ_HOME"
 mkdir -p "$INSTALL_DIR/dsh/node_modules"
 for m in "$INSTALL_DIR"/modules/*/; do
   [ -d "$m" ] || continue
@@ -196,22 +199,25 @@ for m in "$INSTALL_DIR"/modules/*/; do
   rm -rf "$target"
   cp -r "$m" "$target"
 done
-LAUNCHER_TOOLS="$HOME/.dsh/profiles/node_modules/@deepseek-ai/dsh-tools"
-mkdir -p "$INSTALL_DIR/dsh/node_modules/@deepseek-ai"
-if [ ! -L "$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools" ] || \
-   [ "$(readlink -f "$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools" 2>/dev/null)" != "$LAUNCHER_TOOLS" ]; then
-  rm -rf "$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools"
-  ln -s "$LAUNCHER_TOOLS" "$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools" 2>/dev/null \
-    || warn 'dsh-tools 链接失败（Windows/无权限环境可忽略；真机 Linux 正常）'
+LAUNCHER_TOOLS="$PROJ_HOME/profiles/node_modules/@deepseek-ai/dsh-tools"
+TOOLS_PKG="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools"
+mkdir -p "$PROJ_HOME/profiles/node_modules/@deepseek-ai"
+if [ -f "$TOOLS_PKG/package.json" ]; then
+  if [ ! -L "$LAUNCHER_TOOLS" ] || [ "$(readlink -f "$LAUNCHER_TOOLS" 2>/dev/null)" != "$(readlink -f "$TOOLS_PKG")" ]; then
+    rm -rf "$LAUNCHER_TOOLS"
+    ln -s "$TOOLS_PKG" "$LAUNCHER_TOOLS" 2>/dev/null || warn 'dsh-tools 回退副本链接失败'
+  fi
+else
+  warn '项目内 dsh-tools 缺失（依赖未装？）；更新后请重跑 install.sh'
 fi
 ok 'modules 已同步'
 
 # ---------------- 10. agent preset 强制同步（install.sh 为"存在即跳过"，更新需强制覆盖） ----------------
 if [ -d "$INSTALL_DIR/presets/archive-standard" ]; then
-  mkdir -p "$HOME/.dsh/.agent-presets"
-  rm -rf "$HOME/.dsh/.agent-presets/archive-standard"
-  cp -r "$INSTALL_DIR/presets/archive-standard" "$HOME/.dsh/.agent-presets/archive-standard"
-  ok 'agent preset 已同步'
+  mkdir -p "$PROJ_HOME/.agent-presets"
+  rm -rf "$PROJ_HOME/.agent-presets/archive-standard"
+  cp -r "$INSTALL_DIR/presets/archive-standard" "$PROJ_HOME/.agent-presets/archive-standard"
+  ok 'agent preset 已同步（项目 home）'
 fi
 
 # ---------------- 11. 平台清理（保持手机包形态：无 Windows 平台脚本） ----------------
@@ -219,9 +225,9 @@ fi
 ok '已清理 Windows 平台脚本（保持手机包形态）'
 
 # ---------------- 12. 验证 + 摘要 + 日志 + 启动 ----------------
-if [ "$NO_START" -ne 1 ] && need dsh; then
-  log '验证 profile 可加载（dsh --profile archive --dump-config）...'
-  OUT="$(dsh --profile archive --dump-config 2>&1)"
+if [ "$NO_START" -ne 1 ] && [ -f "$ENGINE_BIN" ]; then
+  log '验证 profile 可加载（项目引擎 + 项目 home）...'
+  OUT="$(node "$ENGINE_BIN" --profile archive --dump-config 2>&1)"
   if [ $? -ne 0 ]; then
     warn 'profile 验证失败，输出如下：'
     echo "$OUT" | head -n 20

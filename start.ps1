@@ -73,20 +73,21 @@ Write-Host '=============================='
 Write-Host '  DSH-ARCHIVE one-click start'
 Write-Host '=============================='
 
-# 1) environment checks
-if (-not (Get-Command dsh -ErrorAction SilentlyContinue)) {
-  Write-Host '[start] ERROR: dsh command not found (npm install -g @deepseek-ai/dsh first)' -ForegroundColor Red
+# 1) 环境检查（2026-09-11 独立化）：使用项目自带的 dsh 引擎，不再依赖全局 dsh 命令
+$projHome  = Join-Path $dshDir 'home'
+$engineBin = Join-Path $dshDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+if (-not (Test-Path $engineBin)) {
+  Write-Host '[start] ERROR: 未找到项目自带 dsh 引擎（node_modules\@deepseek-ai\dsh）' -ForegroundColor Red
+  Write-Host '[start] 请双击《首次安装或移动项目位置点我.cmd》完成依赖安装（首次需联网），或手动执行：cd dsh && pnpm install' -ForegroundColor Red
   exit 1
 }
 
-# 1.5) profile junction 必须指向【本副本】的 dsh（2026-09-05 防御 + 2026-09-09 自愈增强）。
-#      ~/.dsh/profiles/archive 是用户级全局单点；对话记录与模型提供商配置都存于各副本自己的
-#      dsh\data。若 junction 或 dsh\cordis.patch.yml 里的数据路径指向其它(失效/空白)位置，启动会
-#      显示"数据被重置"。启动前统一判定：
-#        A. 一致                              → 直接启动
-#        B. 无歧义的"被移动"（本目录有数据，junction/数据路径只指向已删除或空白的旧位置）
-#                                             → 自动运行一次 fix-project-location -NoPrompt 自愈后启动
-#        C. 有歧义（别处存在含数据的副本等）  → 拒绝启动并红字指引（勿删任何副本）
+# 1.5) 项目内 profile 入口（2026-09-11 独立化）：入口一律位于项目 home 内
+#      （<项目>\dsh\home\profiles\archive -> <项目>\dsh），不再使用 ~/.dsh——也就不存在
+#      "多副本共用全局入口被互相覆盖"的问题；缺失/指向错误时本脚本直接创建或修正。
+#      另做数据路径自检：cordis.patch.yml 的数据路径必须全部落在本副本 dsh\data，
+#      否则（git 检出/移动未归一化）自动运行一次 fix-project-location -NoPrompt 修复；
+#      若残留路径指向"存在且含数据"的位置，则拒绝启动并指引（防数据被顶替）。
 function Test-DataPresent([string]$dshDir) {
   $d = Join-Path $dshDir 'data'
   if (-not (Test-Path $d)) { return $false }
@@ -118,9 +119,23 @@ function Test-DirHealable([string]$dirPath) {
   if (-not (Test-Path $dirPath)) { return $true }
   return (-not (Test-DataPresent $dirPath))
 }
-$junction = Join-Path $env:USERPROFILE '.dsh\profiles\archive'
-$ji = Get-JunctionInfo $junction
-$junctionOk = if ($ji.isJunction) { Test-JunctionPointsTo $junction $dshDir } else { $null }
+$junction = Join-Path $projHome 'profiles\archive'
+if (Test-Path $junction) {
+  $jit = Get-Item $junction -Force -ErrorAction SilentlyContinue
+  if (($null -eq $jit) -or ($jit.LinkType -ne 'Junction')) {
+    Write-Host "[start] ERROR: $junction 已存在但不是 junction（真实目录），请手动处理后重试。" -ForegroundColor Red
+    exit 1
+  }
+} else {
+  New-Item -ItemType Directory -Force -Path (Split-Path $junction -Parent) | Out-Null
+  New-Item -ItemType Junction -Path $junction -Target $dshDir | Out-Null
+  Write-Host "[start] 已创建项目内 profile 入口：$junction -> $dshDir" -ForegroundColor Green
+}
+if (-not (Test-JunctionPointsTo $junction $dshDir)) {
+  & cmd /c rmdir "`"$junction`"" 2>$null | Out-Null
+  New-Item -ItemType Junction -Path $junction -Target $dshDir | Out-Null
+  Write-Host "[start] 已修正项目内 profile 入口指向：$junction -> $dshDir" -ForegroundColor Yellow
+}
 $patchFile = Join-Path $dshDir 'cordis.patch.yml'
 $dataPrefix = (($root.TrimEnd('\') -replace '\\', '/').TrimEnd('/')) + '/dsh/data'
 $keyPat = '^\s*(root|path|dbPath|dataPath|dataRoot|personaPath|ledgerPath|skillsDir|notificationsPath|trajectoryPath|dshHome):\s*["'']?([A-Za-z]:[^"''#\r\n]+)'
@@ -135,23 +150,15 @@ if (Test-Path $patchFile) {
     }
   }
 }
-$aHasData = Test-DataPresent $dshDir
-$strayHealable = $true
-foreach ($v in $strayValues) {
-  $idx = $v.IndexOf('/dsh/data')
-  if ($idx -lt 0) { $strayHealable = $false; break }
-  if (-not (Test-DirHealable ($v.Substring(0, $idx) -replace '/', '\'))) { $strayHealable = $false; break }
-}
-$juncHealable = $false
-if ($null -eq $junctionOk) {
-  $juncHealable = $aHasData   # junction 缺失且本目录有数据：修复入口即可；全新安装则请先跑首次安装脚本
-} elseif (-not $junctionOk) {
-  $juncHealable = Test-DirHealable ($ji.target -replace '/', '\')
-}
-$needHeal = ($null -eq $junctionOk -or -not $junctionOk -or $strayValues.Count -gt 0)
-if ($needHeal) {
-  if ($aHasData -and $juncHealable -and $strayHealable) {
-    Write-Host '[start] 检测到项目位置与数据路径不一致，且旧位置已删除/为空（无数据风险），自动归一化一次（等价于运行《首次安装或移动项目位置点我.cmd》）...' -ForegroundColor Yellow
+if ($strayValues.Count -gt 0) {
+  $healable = $true
+  foreach ($v in $strayValues) {
+    $idx = $v.IndexOf('/dsh/data')
+    if ($idx -lt 0) { $healable = $false; break }
+    if (-not (Test-DirHealable ($v.Substring(0, $idx) -replace '/', '\'))) { $healable = $false; break }
+  }
+  if ($healable) {
+    Write-Host '[start] 检测到数据路径指向已失效/空白位置（文件夹被移动或更新未完成），自动归一化一次（等价于运行《首次安装或移动项目位置点我.cmd》）...' -ForegroundColor Yellow
     $fix = Join-Path $root 'fix-project-location.ps1'
     if (-not (Test-Path $fix)) {
       Write-Host '[start] ERROR: 缺少 fix-project-location.ps1，无法自动归一化。' -ForegroundColor Red
@@ -162,8 +169,6 @@ if ($needHeal) {
       Write-Host '[start] ERROR: 自动归一化未通过，请手动双击《首次安装或移动项目位置点我.cmd》查看原因。' -ForegroundColor Red
       exit 1
     }
-    $ji2 = Get-JunctionInfo $junction
-    $ok2 = ($ji2.isJunction -and (Test-JunctionPointsTo $junction $dshDir))
     $stray2 = 0
     if (Test-Path $patchFile) {
       foreach ($line in [System.IO.File]::ReadAllLines($patchFile)) {
@@ -175,38 +180,32 @@ if ($needHeal) {
         }
       }
     }
-    if ($ok2 -and $stray2 -eq 0) {
-      Write-Host '[start] 自动归一化完成，继续启动。' -ForegroundColor Green
-    } else {
-      Write-Host '[start] ERROR: 自动归一化后仍不一致，请手动运行《首次安装或移动项目位置点我.cmd》检查。' -ForegroundColor Red
+    if ($stray2 -ne 0) {
+      Write-Host '[start] ERROR: 自动归一化后数据路径仍不一致，请手动运行《首次安装或移动项目位置点我.cmd》检查。' -ForegroundColor Red
       exit 1
     }
+    Write-Host '[start] 自动归一化完成，继续启动。' -ForegroundColor Green
   } else {
-    Write-Host '[start] ERROR: 启动环境不一致，拒绝启动：' -ForegroundColor Red
-    if ($null -eq $junctionOk) {
-      Write-Host "[start]   profile junction 缺失或不是 junction：$junction" -ForegroundColor Red
-      if ($aHasData) {
-        Write-Host '[start]   本目录含用户数据且未发现其它含数据副本——请运行一次《首次安装或移动项目位置点我.cmd》重建入口。' -ForegroundColor Yellow
-      } else {
-        Write-Host '[start]   本目录 dsh\data 为空（全新/未完成安装）。首次使用请先双击《首次安装或移动项目位置点我.cmd》。' -ForegroundColor Yellow
-      }
-    } elseif (-not $junctionOk) {
-      Write-Host "[start]   junction 指向的并非本副本：$junction -> $($ji.target)" -ForegroundColor Red
-    } else {
-      Write-Host '[start]   dsh\cordis.patch.yml 数据路径未指向本副本（见下）。' -ForegroundColor Red
-    }
-    if ($strayValues.Count -gt 0) {
-      Write-Host '[start]   数据路径残留（非本副本）：' -ForegroundColor Red
-      $strayValues | ForEach-Object { Write-Host ('[start]     ' + $_) -ForegroundColor Red }
-      Write-Host "[start]   应为：$dataPrefix" -ForegroundColor Red
-    }
-    Write-Host '[start] 常见成因：a) 一键更新/回滚中途被中断、路径归一化未完成；b) 文件夹被移动/复制后未重跑修复；' -ForegroundColor Yellow
-    Write-Host '[start] c) 本机存在多个副本、入口被其它副本的修复脚本改指。真实数据在各副本自己的 dsh\data 里、未丢失——' -ForegroundColor Yellow
-    Write-Host '[start] 请到"含你数据的副本"目录双击《首次安装或移动项目位置点我.cmd》后再启动；勿删除任何副本。' -ForegroundColor Yellow
+    Write-Host '[start] ERROR: 拒绝启动——dsh\cordis.patch.yml 的数据路径指向"存在且含数据"的其它位置：' -ForegroundColor Red
+    $strayValues | ForEach-Object { Write-Host ('[start]     ' + $_) -ForegroundColor Red }
+    Write-Host "[start] 本副本应为：$dataPrefix" -ForegroundColor Red
+    Write-Host '[start] 常见情形：本目录是空白副本而数据在另一副本，或更新/移动后归一化未完成。' -ForegroundColor Yellow
+    Write-Host '[start] 请到"含你数据的副本"目录启动；或在本目录运行《首次安装或移动项目位置点我.cmd》后按提示确认。' -ForegroundColor Yellow
     exit 1
   }
 } else {
-  Write-Host '[start] profile junction 与数据路径一致。' -ForegroundColor Green
+  Write-Host '[start] 环境自检通过（项目内引擎 + 项目内 profile 入口 + 数据路径一致）。' -ForegroundColor Green
+}
+
+# 1.6) 项目 home 的 agent preset（2026-09-11 独立化）：preset 的加载位置由 DSH_HOME 决定，
+#      必须在引擎启动前就位，否则主会话会因 "preset archive-standard not found" 而 resume 失败
+#      （既有安装从 ~/.dsh 迁移过来时尤其重要）。幂等：仅缺失时复制，不覆盖已有内容。
+$presetSrc = Join-Path $root 'presets\archive-standard'
+$presetDst = Join-Path $projHome '.agent-presets\archive-standard'
+if ((Test-Path $presetSrc) -and -not (Test-Path $presetDst)) {
+  New-Item -ItemType Directory -Force -Path (Split-Path $presetDst -Parent) | Out-Null
+  Copy-Item $presetSrc $presetDst -Recurse -Force
+  Write-Host "[start] 已就位 agent preset 到项目 home（$presetDst）" -ForegroundColor Green
 }
 
 # 2) sync project plugins (latest code + rebuild dsh-tools junction)
@@ -355,8 +354,11 @@ if (Test-Path $log) {
 #       once by this script unless -NoOpen.
 # Log encoding (2026-08-30 fix): redirect via cmd /c - cmd writes bytes as-is, so dsh
 #       UTF-8 output lands verbatim; PS 5.1 *>> would transcode to ANSI/GBK and garble it.
+# 2026-09-11 独立化：启动【项目自带引擎】（node <项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js），
+#       并通过 cmd set 只在本次子进程内注入 DSH_HOME=<项目>\dsh\home —— 全局 dsh 与 ~/.dsh
+#       的任意改动都不参与本项目运行（原 DSH 升级/卸载/家目录清理均无影响）。
 Write-Host "[start] starting control UI at http://127.0.0.1:$port (log: $log)"
-$cmd = "dsh --profile archive --port $port --no-open >> `"$log`" 2>&1"
+$cmd = "set `"DSH_HOME=$projHome`" && node `"$engineBin`" --profile archive --port $port --no-open >> `"$log`" 2>&1"
 Start-Process cmd -ArgumentList @('/c', $cmd) -WindowStyle Hidden
 
 # 5) wait until ready

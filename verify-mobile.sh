@@ -4,8 +4,8 @@
 #  用法：bash verify-mobile.sh
 #  用途：每次项目改动同步到手机分发包后，在手机端快速确认
 #        本包是否完整、能否使用（对应"检查改动在手机分发包能否使用"）。
-#  检查项：Node / dsh / profile 链接 / 路径归一化 / 依赖 / 模块同步 /
-#          mobile-ui 注册 / dsh-tools 链接 / ollama / 数据目录
+#  检查项：Node / 项目 dsh 引擎 / 项目 home 与 profile 链接 / 路径归一化 / 依赖 / 模块同步 /
+#          mobile-ui 注册 / dsh-tools 实例一致 / 构建白名单 / ollama / 数据目录 / 凭据权限
 # ============================================================
 set -uo pipefail
 
@@ -27,14 +27,25 @@ else
   no 'Node.js >= 22.5（当前缺失或过低）'
 fi
 
-# 2. dsh CLI
-need dsh && ok "dsh CLI $(dsh --version 2>/dev/null | head -n1)" || no 'dsh CLI（请先运行 install.sh）'
-
-# 3. profile 符号链接
-if [ -L "$HOME/.dsh/profiles/archive" ] && [ "$(readlink -f "$HOME/.dsh/profiles/archive")" = "$INSTALL_DIR/dsh" ]; then
-  ok 'profile 符号链接正确'
+# 2. 项目自带 dsh 引擎（2026-09-11 独立化：不再要求全局 dsh CLI）
+ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+if [ -f "$ENGINE_BIN" ]; then
+  ok "项目 dsh 引擎 $(node "$ENGINE_BIN" --version 2>/dev/null | head -n1)"
 else
-  no 'profile 符号链接缺失或指向错误（请重跑 install.sh）'
+  no '项目 dsh 引擎缺失（请重跑 install.sh 完成 pnpm install）'
+fi
+
+# 3. 项目 home 与 profile 符号链接
+PROJ_HOME="$INSTALL_DIR/dsh/home"
+if [ -L "$PROJ_HOME/profiles/archive" ] && [ "$(readlink -f "$PROJ_HOME/profiles/archive")" = "$INSTALL_DIR/dsh" ]; then
+  ok '项目内 profile 符号链接正确'
+else
+  no '项目内 profile 符号链接缺失或指向错误（请重跑 install.sh）'
+fi
+if [ -d "$PROJ_HOME/.agent-presets/archive-standard" ]; then
+  ok 'agent preset 已就位于项目 home'
+else
+  no 'agent preset 未就位（主会话将无法 resume；请重跑 install.sh）'
 fi
 
 # 4. 路径归一化（无 Windows 路径残留）
@@ -64,8 +75,25 @@ else
   no 'mobile-ui 未注册或缺失'
 fi
 
-# 8. dsh-tools 链接
-if [ -L "$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools" ]; then ok 'dsh-tools 链接就绪'; else no 'dsh-tools 链接缺失（请重跑 install.sh）'; fi
+# 8. dsh-tools 实例一致（项目内真实包 + 项目 home 回退链接指向同一副本）
+TOOLS_PKG="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools"
+LAUNCHER_TOOLS="$PROJ_HOME/profiles/node_modules/@deepseek-ai/dsh-tools"
+if [ -f "$TOOLS_PKG/package.json" ]; then
+  if [ "$(readlink -f "$LAUNCHER_TOOLS" 2>/dev/null)" = "$(readlink -f "$TOOLS_PKG")" ]; then
+    ok 'dsh-tools 实例一致（项目内同一副本）'
+  else
+    no 'dsh-tools 回退链接缺失或指向不同副本（请重跑 install.sh）'
+  fi
+else
+  no '项目内 dsh-tools 缺失（依赖未装？请重跑 install.sh）'
+fi
+
+# 8b. pnpm 构建白名单（pnpm>=11 默认拦截原生构建脚本，缺失会让全新安装失败）
+if grep -q 'allowBuilds' "$INSTALL_DIR/dsh/pnpm-workspace.yaml" 2>/dev/null; then
+  ok 'pnpm allowBuilds 已配置'
+else
+  no 'dsh/pnpm-workspace.yaml 缺少 allowBuilds（pnpm>=11 下全新安装会失败）'
+fi
 
 # 9. ollama 二进制（存在即补执行位；Windows 打包的 tar 不带 Unix 权限位）
 if [ -f "$INSTALL_DIR/ollama/bin/ollama" ]; then

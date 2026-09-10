@@ -4,13 +4,13 @@
 #  用途：项目被移动/复制到新位置后（或首次安装），一键检测当前用户环境、
 #        配置项目全部前置与依赖、修复所有依赖旧位置/旧机器的问题：
 #          0. 校验项目根
-#          1. 环境检测：OS / PowerShell / 网络 / Node.js / npm / pnpm / dsh CLI
-#          2. 前置自动安装：Node.js（winget）、pnpm、dsh CLI、dsh 家目录初始化
-#          3. ~/.dsh/profiles/archive 目录联接（junction）指向
+#          1. 环境检测：OS / PowerShell / 网络 / Node.js / npm / pnpm / 项目自带 dsh 引擎
+#          2. 前置自动安装：Node.js（winget）、pnpm、项目 dsh 引擎依赖（pnpm install）；项目 home 初始化
+#          3. 项目内 profile 入口（<项目>\dsh\home\profiles\archive -> <项目>\dsh）
 #          4. 项目内旧绝对路径引用重写（仅功能文件：cordis.patch.yml/脚本/配置；跳过 .md/.txt 文档与 URL，防误写）
 #          5. dsh-tools junction 与 modules -> node_modules 插件同步
 #          6. 数据目录存在性
-#          7. profile 可加载性验证（dsh --profile archive --dump-config）
+#          7. profile 可加载性验证（项目引擎 + DSH_HOME=项目 home：--profile archive --dump-config）
 #          8. ollama 向量模型运行时（无本机 ollama 时自动下载，首次启动自动拉取嵌入模型）
 #
 #  用法：双击同目录《首次安装或移动项目位置点我.cmd》；
@@ -47,24 +47,6 @@ function Get-JunctionTarget($path) {
     $item = Get-Item $path -Force -ErrorAction SilentlyContinue
     if (-not $item -or $item.LinkType -ne 'Junction') { return $null }
     return Normalize-Path (($item.Target -join ''))
-}
-# 2026-09-05：判断某副本 dsh\data 是否已含用户数据（会话/设置/凭据/记忆等任一非空即视为有数据）。
-# 用于 junction 改指前的防呆保护：防止把全局 junction 从"有数据的副本"改指到"空白新副本"，
-# 那正是"重进后对话记录与模型提供商配置被重置"的根源之一（数据其实还在原副本，只是不再被读到）。
-function Test-DataPresent([string]$dshDir) {
-    $d = Join-Path $dshDir 'data'
-    if (-not (Test-Path $d)) { return $false }
-    $sess = Join-Path $d 'sessions'
-    if ((Test-Path $sess) -and @(Get-ChildItem $sess -Recurse -File -Force -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
-    foreach ($name in @('settings.yaml', 'credentials.yaml', 'memory.db', 'tasks.db', 'persona.json', 'persona-history.jsonl', 'notifications.jsonl', 'evolution.jsonl', 'consistency.json', 'subconscious.json', 'ledger', 'storages')) {
-        $p = Join-Path $d $name
-        if (-not (Test-Path $p)) { continue }
-        $it = Get-Item $p -Force
-        if ($it.PSIsContainer) {
-            if (@(Get-ChildItem $p -Recurse -File -Force -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
-        } elseif ($it.Length -gt 0) { return $true }
-    }
-    return $false
 }
 # 安全重建 junction（先删旧链接，不触碰目标内容）
 function Set-Junction($link, $target) {
@@ -168,9 +150,9 @@ else { Write-Ok ("npm：" + $npmVer) }
 $pnpmVer = Get-ToolVersion 'pnpm'
 if ($null -eq $pnpmVer) { Write-Warn 'pnpm：未安装（下一步将尝试自动安装）' }
 else { Write-Ok ("pnpm：" + $pnpmVer) }
-$dshVer = Get-ToolVersion 'dsh'
-if ($null -eq $dshVer) { Write-Warn 'dsh CLI：未安装（下一步将尝试自动安装）' }
-else { Write-Ok ("dsh CLI：" + $dshVer) }
+$engineProbe = Join-Path $root 'dsh\node_modules\@deepseek-ai\dsh\lib\bin.js'
+if (Test-Path $engineProbe) { Write-Ok '项目 dsh 引擎：已就位（自带，无需全局 dsh）' }
+else { Write-Warn '项目 dsh 引擎：未安装（下一步将用 pnpm install 自动安装，首次需联网）' }
 
 $winget = Get-Command winget -ErrorAction SilentlyContinue
 if ($winget) { Write-Ok ("winget：" + (Get-ToolVersion 'winget') + "（Node.js 缺失时自动安装用）") }
@@ -182,7 +164,7 @@ if ($DryRun) {
     $missing = @()
     if ($null -eq $nodeVer) { $missing += 'Node.js' }
     if ($null -eq $pnpmVer) { $missing += 'pnpm' }
-    if ($null -eq $dshVer)  { $missing += 'dsh CLI' }
+    if (-not (Test-Path $engineProbe)) { $missing += '项目 dsh 引擎' }
     if ($missing.Count -gt 0) { Write-Fix ("将安装：" + ($missing -join '、')) }
     Write-Skip '（-DryRun 不执行安装，仅报告）'
 } else {
@@ -234,85 +216,65 @@ if ($DryRun) {
         Write-Ok 'pnpm 已就绪'
     }
 
-    # 2c) dsh CLI（npm 全局安装）
-    if (-not (Get-Command dsh -ErrorAction SilentlyContinue)) {
+    # 2c) 项目自带 dsh 引擎（@deepseek-ai/dsh，随 package.json 锁定；2026-09-11 起不再需要全局 dsh CLI）
+    $engineBin = Join-Path $root 'dsh\node_modules\@deepseek-ai\dsh\lib\bin.js'
+    if (-not (Test-Path $engineBin)) {
         if (-not $netOk) {
-            Write-Err 'dsh CLI 缺失且网络不可达，无法自动安装。请联网后重跑本脚本。'
+            Write-Err '项目 dsh 引擎缺失且网络不可达，无法自动安装。请联网后重跑本脚本。'
             Read-Exit; exit 1
         }
-        Write-Host '   正在安装 dsh CLI（npm install -g @deepseek-ai/dsh）...' -ForegroundColor DarkYellow
-        & npm install -g @deepseek-ai/dsh 2>&1 | Out-Host
-        Update-Path
-        if (Get-Command dsh -ErrorAction SilentlyContinue) {
-            Write-Ok ('dsh CLI 已安装：' + (Get-ToolVersion 'dsh'))
-            $dshVer = Get-ToolVersion 'dsh'
-        } else {
-            Write-Err 'dsh CLI 安装失败。请检查 npm 全局目录权限后重试。'
+        Write-Host '   正在安装项目依赖（含自带 dsh 引擎，首次需联网，请稍候）...' -ForegroundColor DarkYellow
+        Push-Location (Join-Path $root 'dsh')
+        try { & pnpm install --config.confirmModulesPurge=false | Out-Host } finally { Pop-Location }
+        if (-not (Test-Path $engineBin)) {
+            Write-Err '项目 dsh 引擎安装失败（pnpm install 未生成 node_modules\@deepseek-ai\dsh）。'
+            Write-Err '请检查网络/镜像与磁盘空间后重试：cd dsh && pnpm install'
             Read-Exit; exit 1
         }
+        Write-Ok '项目 dsh 引擎已安装'
     } else {
-        Write-Ok 'dsh CLI 已就绪'
+        Write-Ok '项目自带 dsh 引擎已就绪'
     }
 
-    # 2d) dsh 家目录初始化（全新 dsh 首次运行生成 launcher 回退副本 ~/.dsh/profiles/node_modules）
-    $launcherTools = Join-Path $userHome '.dsh\profiles\node_modules\@deepseek-ai\dsh-tools'
+    # 2d) 项目 home 初始化（launcher 回退副本落在项目 home；与 ~/.dsh 完全隔离）
+    $projHome = Join-Path $root 'dsh\home'
+    $launcherTools = Join-Path $projHome 'profiles\node_modules\@deepseek-ai\dsh-tools'
     if (-not (Test-Path $launcherTools)) {
-        Write-Host '   首次初始化 dsh 家目录（生成 launcher 回退副本，稍候）...' -ForegroundColor DarkYellow
-        & dsh --profile web --dump-config 2>&1 | Out-Null
+        Write-Host '   初始化项目 home（生成 launcher 回退副本，稍候）...' -ForegroundColor DarkYellow
+        $env:DSH_HOME = $projHome
+        & node $engineBin --profile web --dump-config 2>&1 | Out-Null
         if (-not (Test-Path $launcherTools)) {
-            Write-Err 'dsh 初始化未生成 ~/.dsh/profiles/node_modules/@deepseek-ai/dsh-tools。'
-            Write-Err '请手动运行一次：dsh --profile web --dump-config，然后重跑本脚本。'
+            Write-Err '项目 home 初始化未生成 profiles\node_modules\@deepseek-ai\dsh-tools。'
+            Write-Err '请手动运行：$env:DSH_HOME="<项目>\dsh\home"; node "<项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile web --dump-config'
             Read-Exit; exit 1
         }
-        Write-Ok 'dsh 家目录初始化完成'
+        Write-Ok '项目 home 初始化完成'
     }
 }
 
-# ---------------- 3. dsh 命令兜底校验 ----------------
-Write-Step '3/9 校验 dsh 命令'
-$dshCmd = Get-Command dsh -ErrorAction SilentlyContinue
-if (-not $dshCmd) {
-    Write-Err 'dsh 命令仍不可用（前置安装未成功）。'
+# ---------------- 3. 项目引擎兜底校验 ----------------
+Write-Step '3/9 校验项目 dsh 引擎'
+$engineBin = Join-Path $root 'dsh\node_modules\@deepseek-ai\dsh\lib\bin.js'
+if (-not (Test-Path $engineBin)) {
+    Write-Err '项目 dsh 引擎仍不可用（依赖安装未成功）。'
     Read-Exit; exit 1
 }
-Write-Ok ('dsh：' + $dshCmd.Source)
+$ev = (& node $engineBin --version 2>&1 | Select-Object -First 1)
+Write-Ok ('项目 dsh 引擎：' + $ev)
+$projHome = Join-Path $root 'dsh\home'
+$env:DSH_HOME = $projHome   # 本次进程内注入：后续 junction / preset / dump-config 均落项目 home（不影响 ~/.dsh 与其它 dsh 环境）
 
-# ---------------- 4. profile junction ----------------
-Write-Step '4/9 修复 ~/.dsh/profiles/archive 目录联接'
-$junction   = Join-Path $userHome '.dsh\profiles\archive'
+# ---------------- 4. 项目内 profile 入口 ----------------
+Write-Step '4/9 修复项目内 profile 入口（dsh\home\profiles\archive）'
+$junction   = Join-Path $projHome 'profiles\archive'
 $juncTarget = Join-Path $root 'dsh'
 $wantNorm   = Normalize-Path $juncTarget
 
-# 2026-09-05 场景化决策（目标：任何情况（含闲点/重复运行）都无害、幂等、结果可预期）：
-#   - junction 已正确指向本目录        → 无操作（闲点无害）
-#   - junction 缺失，本目录有数据       → 整体移动/换机后首次修复：创建
-#   - junction 缺失，本目录空白但同层存在含数据的 DSH-ARCHIVE 副本 → 拒绝（避免把入口偷指到空白副本）
-#   - junction 缺失，纯新装             → 创建
-#   - 现指向的旧目录已不存在            → 整体移动：自动改指本目录
-#   - 现指向的旧目录存在但为空白        → 旧副本已废弃：自动改指本目录（无数据可丢）
-#   - 现指向的旧目录有数据、本目录空白  → 危险（会把有数据的旧副本闲置化，界面表现为"数据被重置"）：拒绝并指引
-#   - 两份目录都有数据                  → 复制/歧义：交互确认后才改指；-NoPrompt（一键更新）一律拒绝
-function Find-DataSibling([string]$projectRoot) {
-    $parent = Split-Path $projectRoot -Parent
-    if (-not $parent -or -not (Test-Path $parent)) { return @() }
-    return @(Get-ChildItem $parent -Directory -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like '*DSH-ARCHIVE*' -and $_.FullName.TrimEnd('\') -ne $projectRoot.TrimEnd('\') } |
-        Where-Object { Test-DataPresent (Join-Path $_.FullName 'dsh') } |
-        ForEach-Object { $_.FullName })
-}
+# 2026-09-11 独立化：入口位于【项目 home 内】，与其它副本、与全局 ~/.dsh 互不影响，
+#   因此逻辑简单且幂等：缺失 → 创建；已存在但不是 junction → 报错（防误删真实目录）；
+#   指向不对 → 直接修正回本副本（只影响本副本，不存在"抢别人入口"的问题）。
 try {
     if (-not (Test-Path $junction)) {
-        $curHasData = Test-DataPresent $juncTarget
-        if (-not $curHasData) {
-            $siblings = Find-DataSibling $root
-            if ($siblings.Count -gt 0) {
-                Write-Err 'junction 缺失，且本目录 dsh\data 为空，但发现同层存在含用户数据的 DSH-ARCHIVE 副本：'
-                $siblings | ForEach-Object { Write-Err ('    ' + $_) }
-                Write-Err '若在此创建 junction 指向本目录，启动将读到空数据（原数据在以上副本里，未丢失）。'
-                Write-Err '请到含你数据的副本目录运行本脚本；若本目录确为新装，请先确认旧副本不再需要。'
-                Read-Exit; exit 1
-            }
-        }
         if ($DryRun) { Write-Fix "将创建联接：$junction -> $juncTarget" }
         else { Set-Junction $junction $juncTarget; Write-Ok "已创建联接：$junction -> $juncTarget" }
     } else {
@@ -324,41 +286,10 @@ try {
         if ((Get-JunctionTarget $junction) -eq $wantNorm) {
             Write-Ok '联接已指向正确位置（无需修改）'
         } else {
-            $oldTargetReal = (($item.Target -join '') -replace '/', '\')
-            $oldAlive = Test-Path $oldTargetReal
-            $oldHasData = if ($oldAlive) { Test-DataPresent $oldTargetReal } else { $false }
-            $newHasData = Test-DataPresent $juncTarget
-            $allowRepoint = $false
-            if (-not $oldAlive) {
-                Write-Warn ("现指向的旧目录已不存在：{0}（判定为整体移动，将自动改指本目录）" -f $oldTargetReal)
-                $allowRepoint = $true
-            } elseif (-not $oldHasData) {
-                Write-Warn ("现指向的旧目录为空白副本：{0}（判定为已废弃，将自动改指本目录）" -f $oldTargetReal)
-                $allowRepoint = $true
-            } elseif (-not $newHasData) {
-                Write-Err '检测到 junction 现指向的副本 dsh\data 含用户数据，而本目录 dsh\data 为空！'
-                Write-Err ("  现指向副本：{0}" -f $oldTargetReal)
-                Write-Err ("  本目录副本：{0}" -f $juncTarget)
-                Write-Err '若把 junction 改指本目录，启动将读到空数据——对话记录与模型提供商配置会显示"被重置"（数据仍在原副本，未丢失）。'
-                Write-Err '处理方式：如本目录是误建/重领的第二个空白副本，请删除本副本后，到含数据的副本目录运行本脚本；'
-                Write-Err '如确为整体迁移且数据已随目录移动（本目录 dsh\data 应为非空），请核对目录后重试。'
-                Read-Exit; exit 1
-            } else {
-                Write-Warn '检测到两份副本的 dsh\data 都含用户数据（可能是复制/备份后想切换到本目录）。'
-                Write-Warn ("  现指向副本：{0}" -f $oldTargetReal)
-                Write-Warn ("  本目录副本：{0}" -f $juncTarget)
-                if ($NoPrompt) {
-                    Write-Err '自动模式（-NoPrompt）下无法确认使用哪一份，已中止；请到实际要用的副本目录交互运行本脚本。'
-                    Read-Exit; exit 1
-                }
-                Write-Host '  改指后本机启动入口将读取本目录的数据；旧副本目录中的数据文件不会被删除，只是不再被读取。' -ForegroundColor DarkYellow
-                $ans = Read-Host '  确认将本机入口指向本目录？(Y 继续 / N 取消)'
-                $allowRepoint = ($ans -match '^[Yy]')
-                if (-not $allowRepoint) { Write-Skip '已取消，junction 未修改。'; Read-Exit; exit 1 }
-            }
-            if ($allowRepoint) {
-                if ($DryRun) { Write-Fix "将重建联接：$junction 现指向 $($item.Target)，应指向 $juncTarget" }
-                else { Set-Junction $junction $juncTarget; Write-Ok "已重建联接：$junction -> $juncTarget" }
+            if ($DryRun) { Write-Fix "将重建联接：$junction 现指向 $($item.Target)，应指向 $juncTarget" }
+            else {
+                Set-Junction $junction $juncTarget
+                Write-Warn "已修正联接：$junction -> $juncTarget（本项目入口只影响本副本）"
             }
         }
     }
@@ -432,24 +363,25 @@ else { Write-Host ("  [改] 共 {0} 个文件含过时路径引用，已处理�
 Write-Step '6/9 检查插件依赖并同步'
 # 6a) agent preset 随包分发：分发包携带 presets/archive-standard，首次部署时装入本机 ~/.dsh/.agent-presets/
 $presetSrc = Join-Path $root 'presets\archive-standard'
-$presetDst = Join-Path $userHome '.dsh\.agent-presets\archive-standard'
+$presetDst = Join-Path $projHome '.agent-presets\archive-standard'
 if (-not (Test-Path $presetSrc)) {
     Write-Skip '项目内未发现 presets\archive-standard（旧版项目可能没有；若主会话需 standard 工具请补上）'
 } elseif (Test-Path $presetDst) {
     Write-Ok 'agent preset archive-standard 已存在'
 } else {
-    if ($DryRun) { Write-Fix '将安装 agent preset archive-standard 到 ~/.dsh/.agent-presets/' }
+    if ($DryRun) { Write-Fix '将安装 agent preset archive-standard 到项目 home\.agent-presets\' }
     else {
         New-Item -ItemType Directory -Path (Split-Path $presetDst -Parent) -Force | Out-Null
         Copy-Item $presetSrc $presetDst -Recurse -Force
         Write-Ok '已安装 agent preset archive-standard'
     }
 }
-# 注：@deepseek-ai/dsh-base 是 bundle（由 dsh 安装目录解析），不进 profile 的 node_modules。
-# 依赖完整标志 = pnpm 安装标记(.modules.yaml) + 自定义插件已就位。
+# 注：@deepseek-ai/dsh-base 等 bundle 由项目自带引擎（node_modules\@deepseek-ai\dsh）解析。
+# 依赖完整标志 = pnpm 安装标记(.modules.yaml) + 自定义插件 + 项目 dsh 引擎三者就位。
 $depMarker = Join-Path $root 'dsh\node_modules\.modules.yaml'
 $depPlugin = Join-Path $root 'dsh\node_modules\dsh-archive-memory\package.json'
-if (-not (Test-Path $depMarker) -or -not (Test-Path $depPlugin)) {
+$depEngine = Join-Path $root 'dsh\node_modules\@deepseek-ai\dsh\lib\bin.js'
+if (-not (Test-Path $depMarker) -or -not (Test-Path $depPlugin) -or -not (Test-Path $depEngine)) {
     $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
     if (-not $pnpm) {
         Write-Err 'dsh\node_modules 依赖缺失且未找到 pnpm。请先安装 pnpm，然后执行：'
@@ -465,7 +397,7 @@ if (-not (Test-Path $depMarker) -or -not (Test-Path $depPlugin)) {
         Write-Ok '依赖安装完成'
     }
 } else {
-    Write-Ok 'profile 依赖完整（pnpm 标记 + 自定义插件就位）'
+    Write-Ok 'profile 依赖完整（pnpm 标记 + 自定义插件 + 项目 dsh 引擎就位）'
 }
 
 $syncScript = Join-Path $root 'dsh\scripts\sync-plugins.ps1'
@@ -473,14 +405,15 @@ if (-not (Test-Path $syncScript)) {
     Write-Err '缺少 dsh\scripts\sync-plugins.ps1，项目文件不完整。'
     Read-Exit; exit 1
 }
-# 插件同步依赖 launcher 的 dsh-tools 回退副本（~/.dsh/profiles/node_modules），
-# 该目录由 dsh 首次运行时自动维护；前置步骤 2d 已保证其存在。
-$launcherTools = Join-Path $userHome '.dsh\profiles\node_modules\@deepseek-ai\dsh-tools'
-if (-not (Test-Path $launcherTools)) {
-    Write-Err '未找到 launcher 的 dsh-tools（~/.dsh/profiles/node_modules/@deepseek-ai/dsh-tools）。'
-    Write-Err '请先运行一次任意 dsh 命令（如：dsh --profile web --dump-config）让其初始化，再重试本脚本。'
+# 插件同步依赖 launcher 的 dsh-tools 回退副本（项目 home\profiles\node_modules），
+# 该副本由项目引擎首次运行时自动 heal 生成；前置步骤 2d 已保证其存在。
+$launcherTools = Join-Path $projHome 'profiles\node_modules\@deepseek-ai\dsh-tools'
+if (-not $DryRun -and -not (Test-Path $launcherTools)) {
+    Write-Err '未找到 launcher 的 dsh-tools（项目 home\profiles\node_modules\@deepseek-ai\dsh-tools）。'
+    Write-Err '请先重跑本脚本（步骤 2d 会自动初始化项目 home）。'
     Read-Exit; exit 1
 }
+if ($DryRun -and -not (Test-Path $launcherTools)) { Write-Skip '（-DryRun：项目 home 的 launcher 回退副本将在正式运行时自动生成）' }
 if ($DryRun) {
     Write-Skip '（-DryRun 跳过插件同步）'
 } else {
@@ -510,9 +443,10 @@ Write-Step '8/9 验证 profile 可加载'
 if ($DryRun) {
     Write-Skip '（-DryRun 跳过验证）'
 } else {
-    $out = & dsh --profile archive --dump-config 2>&1 | Out-String
+    $env:DSH_HOME = $projHome
+    $out = & node $engineBin --profile archive --dump-config 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) {
-        Write-Ok 'profile 合成正常（dsh --profile archive --dump-config 成功）'
+        Write-Ok 'profile 合成正常（项目引擎 + 项目 home：--profile archive --dump-config 成功）'
     } else {
         Write-Err 'profile 验证失败，输出如下：'
         Write-Host ($out.Substring(0, [Math]::Min(1500, $out.Length)))

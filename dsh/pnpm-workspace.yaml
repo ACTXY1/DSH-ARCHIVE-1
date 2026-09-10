@@ -3,3 +3,13 @@ packages:
 
 nodeLinker: hoisted
 autoInstallPeers: true
+
+# 2026-09-11：项目自带 dsh 引擎（@deepseek-ai/dsh，见 package.json，exact pin）后，
+# pnpm ≥11 默认拦截依赖构建脚本（ERR_PNPM_IGNORED_BUILDS），必须显式放行以下原生/构建依赖，
+# 否则全新安装会失败。旧键 onlyBuiltDependencies 在 pnpm ≥11 已被忽略，须用 allowBuilds。
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': true
+  koffi: true
+  node-pty: true
+  protobufjs: true

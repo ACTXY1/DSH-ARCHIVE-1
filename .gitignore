@@ -8,6 +8,9 @@
 dsh/data/
 dsh/logs/
 dsh/backups/
+# 2026-09-11 独立化：项目自带 DSH 家目录（profiles/junction/agent-presets/dsh-tools 回退副本）
+# 属运行时产物，绝不进仓库、不进分发包、不参与一键更新。
+dsh/home/
 *.log
 *.pid
 

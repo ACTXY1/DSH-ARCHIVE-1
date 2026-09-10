@@ -7,9 +7,9 @@
 #
 #  功能（与 Windows 版 fix-project-location.ps1 等价）：
 #    0. 校验项目根
-#    1. 环境检测：node / npm / pnpm / dsh CLI
-#    2. dsh 家目录初始化（生成 launcher 的 dsh-tools 副本）
-#    3. ~/.dsh/profiles/archive 符号链接指向本项目 dsh 目录
+#    1. 环境检测：node / npm / pnpm（**项目自带 dsh 引擎，无需全局 dsh CLI**）
+#    2. 项目 home 准备（<项目>/dsh/home，DSH_HOME 注入；与 ~/.dsh 完全隔离）
+#    3. <项目>/dsh/home/profiles/archive 符号链接指向本项目 dsh 目录
 #    4. 重写项目内旧 Windows 绝对路径 -> 当前安装目录
 #    5. 装入 agent preset archive-standard
 #    6. pnpm install + 模块源码同步 + dsh-tools 链接
@@ -50,11 +50,13 @@ ok "Node.js $(node -v)"
 need npm || die '未找到 npm（Node.js 应自带）'
 need pnpm || { log '未找到 pnpm，正在安装...'; npm install -g pnpm >/dev/null 2>&1 || die 'pnpm 安装失败'; }
 ok "pnpm $(pnpm --version 2>/dev/null)"
-if need dsh; then
-  ok "dsh CLI $(dsh --version 2>/dev/null | head -n1)"
+# 项目自带 dsh 引擎（2026-09-11 独立化）：版本在 dsh/package.json 中精确锁定，随步骤 6 的
+# pnpm install 安装；此处仅报告——不再安装、也不再依赖全局 dsh CLI。
+ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+if [ -f "$ENGINE_BIN" ]; then
+  ok "项目 dsh 引擎 $(node "$ENGINE_BIN" --version 2>/dev/null | head -n1)"
 else
-  log "安装全局 dsh CLI @deepseek-ai/dsh@$DSH_VER ..."
-  npm install -g "@deepseek-ai/dsh@$DSH_VER" >/dev/null 2>&1 || die 'dsh CLI 安装失败'
+  log '项目 dsh 引擎尚未安装（步骤 6 将由 pnpm install 完成）'
 fi
 # git：更新检测/一键更新（updater.check / update.sh）依赖；部分环境（proot Ubuntu 最小安装）未预装
 if ! need git; then
@@ -66,18 +68,15 @@ if ! need git; then
   fi
 fi
 
-# ---------------- 2. dsh 家目录初始化（launcher dsh-tools 副本） ----------------
-LAUNCHER_TOOLS="$HOME/.dsh/profiles/node_modules/@deepseek-ai/dsh-tools"
-if [ ! -d "$LAUNCHER_TOOLS" ]; then
-  log '初始化 dsh 家目录（生成 launcher 副本）...'
-  dsh --profile web --dump-config >/dev/null 2>&1 || true
-  [ -d "$LAUNCHER_TOOLS" ] || die 'dsh 初始化未生成 launcher dsh-tools，请手动运行：dsh --profile web --dump-config'
-fi
-ok 'launcher dsh-tools 就绪'
+# ---------------- 2. 项目 home（DSH_HOME）准备 ----------------
+PROJ_HOME="$INSTALL_DIR/dsh/home"
+export DSH_HOME="$PROJ_HOME"     # 仅本次安装进程内注入：所有引擎调用都用项目 home（与 ~/.dsh 隔离）
+LAUNCHER_TOOLS="$PROJ_HOME/profiles/node_modules/@deepseek-ai/dsh-tools"
+mkdir -p "$PROJ_HOME/profiles"
+ok "项目 home 就绪：$PROJ_HOME（与 ~/.dsh 完全隔离）"
 
-# ---------------- 3. profile 符号链接 ----------------
-mkdir -p "$HOME/.dsh/profiles"
-LINK="$HOME/.dsh/profiles/archive"
+# ---------------- 3. profile 符号链接（项目 home 内） ----------------
+LINK="$PROJ_HOME/profiles/archive"
 if [ -L "$LINK" ] && [ "$(readlink -f "$LINK")" = "$INSTALL_DIR/dsh" ]; then
   ok 'profile 已挂载'
 else
@@ -120,11 +119,11 @@ else
   log "已重写 $changed 个文件中的旧路径 -> $INSTALL_DIR"
 fi
 
-# ---------------- 5. agent preset 装入 ----------------
+# ---------------- 5. agent preset 装入（项目 home 内） ----------------
 if [ -d "$INSTALL_DIR/presets/archive-standard" ]; then
-  mkdir -p "$HOME/.dsh/.agent-presets"
-  if [ ! -d "$HOME/.dsh/.agent-presets/archive-standard" ]; then
-    cp -r "$INSTALL_DIR/presets/archive-standard" "$HOME/.dsh/.agent-presets/archive-standard"
+  mkdir -p "$PROJ_HOME/.agent-presets"
+  if [ ! -d "$PROJ_HOME/.agent-presets/archive-standard" ]; then
+    cp -r "$INSTALL_DIR/presets/archive-standard" "$PROJ_HOME/.agent-presets/archive-standard"
     ok '已装入 agent preset archive-standard'
   else
     ok 'agent preset archive-standard 已存在'
@@ -139,6 +138,12 @@ if [ ! -f node_modules/.modules.yaml ] || [ ! -f node_modules/dsh-archive-memory
   pnpm install --config.confirmModulesPurge=false || die 'pnpm install 失败'
 fi
 ok 'profile 依赖完整'
+# 6a. launcher 回退副本初始化（项目引擎首次运行会自动 heal 到项目 home）
+if [ ! -e "$LAUNCHER_TOOLS" ]; then
+  log '初始化项目 home 的 launcher 回退副本...'
+  node "$ENGINE_BIN" --profile web --dump-config >/dev/null 2>&1 || true
+  [ -e "$LAUNCHER_TOOLS" ] || warn 'launcher 回退副本未生成（继续；随后步骤会直接建立同副本链接）'
+fi
 # 6b. 模块源码同步（等价 Windows sync-plugins.ps1）
 for m in "$INSTALL_DIR"/modules/*/; do
   [ -d "$m" ] || continue
@@ -148,13 +153,16 @@ for m in "$INSTALL_DIR"/modules/*/; do
   cp -r "$m" "$target"
 done
 ok 'modules 已同步到 node_modules'
-# 6c. dsh-tools 链接指向 launcher 副本（同一模块实例，Symbol 一致）
-mkdir -p node_modules/@deepseek-ai
-if [ ! -L node_modules/@deepseek-ai/dsh-tools ] || [ "$(readlink -f node_modules/@deepseek-ai/dsh-tools)" != "$LAUNCHER_TOOLS" ]; then
-  rm -rf node_modules/@deepseek-ai/dsh-tools
-  ln -s "$LAUNCHER_TOOLS" node_modules/@deepseek-ai/dsh-tools || die 'dsh-tools 链接失败'
+# 6c. dsh-tools 实例一致性（TOOL_RUNTIME_SCHEDULER 是 Symbol，必须同一物理副本）：
+#     项目内由 pnpm 安装真实包；项目 home 下的 launcher 回退副本指向它。
+TOOLS_PKG="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh-tools"
+[ -f "$TOOLS_PKG/package.json" ] || die '项目内 dsh-tools 缺失（pnpm install 未完成？）'
+mkdir -p "$PROJ_HOME/profiles/node_modules/@deepseek-ai"
+if [ ! -L "$LAUNCHER_TOOLS" ] || [ "$(readlink -f "$LAUNCHER_TOOLS")" != "$(readlink -f "$TOOLS_PKG")" ]; then
+  rm -rf "$LAUNCHER_TOOLS"
+  ln -s "$TOOLS_PKG" "$LAUNCHER_TOOLS" || die 'dsh-tools 回退副本链接失败'
 fi
-ok 'dsh-tools 链接就绪'
+ok 'dsh-tools 链接就绪（项目内同一副本）'
 
 # ---------------- 7. 数据目录 ----------------
 mkdir -p "$INSTALL_DIR/dsh/data/sessions" "$INSTALL_DIR/dsh/data/skills" "$INSTALL_DIR/dsh/data/storages"
@@ -214,8 +222,8 @@ else
 fi
 
 # ---------------- 9. 验证 ----------------
-log '验证 profile 可加载（dsh --profile archive --dump-config）...'
-OUT="$(dsh --profile archive --dump-config 2>&1)"
+log '验证 profile 可加载（项目自带引擎 + 项目 home）...'
+OUT="$(node "$ENGINE_BIN" --profile archive --dump-config 2>&1)"
 RC=$?
 if [ $RC -eq 0 ]; then
   ok 'profile 合成正常！'

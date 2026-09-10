@@ -349,14 +349,15 @@ try {
     }
 
     # ---------- 9. agent preset 强制同步（fix 的"存在即跳过"在更新场景不够） ----------
+    # 2026-09-11 独立化：preset 目标改为【项目 home】内的 .agent-presets（不再写 ~/.dsh）。
     $presetSrc = Join-Path $root 'presets\archive-standard'
     if (Test-Path $presetSrc) {
-        $presetDst = Join-Path $env:USERPROFILE '.dsh\.agent-presets\archive-standard'
+        $presetDst = Join-Path $root 'dsh\home\.agent-presets\archive-standard'
         New-Item -ItemType Directory -Path (Split-Path $presetDst -Parent) -Force -ErrorAction SilentlyContinue | Out-Null
         if (Test-Path $presetDst) { Remove-Item $presetDst -Recurse -Force -ErrorAction SilentlyContinue }
         Copy-Item $presetSrc $presetDst -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $presetDst) { Write-Ok 'agent preset 已同步' }
-        else { Write-Warn 'agent preset 同步失败（~/.dsh/.agent-presets），更新继续。' }
+        if (Test-Path $presetDst) { Write-Ok 'agent preset 已同步（项目 home）' }
+        else { Write-Warn 'agent preset 同步失败（dsh\home\.agent-presets），更新继续。' }
     }
 
     # ---------- 10. 位置归一化 + 依赖兜底 + 插件同步 + 验证（复用 fix，-NoPrompt 免交互） ----------
