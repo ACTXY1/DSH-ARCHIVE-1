@@ -92,7 +92,9 @@ const ctx = {
       save: (s) => ({ presets: [], activePresetId: '', entries: [], injectCapChars: 1200 }),
       preview: (t, p) => ({ activePresetId: '', injected: [], truncated: 0, budgetUsed: 0, injectCapChars: 1200 }),
     } },
-  memory: { forgetStats: () => ({ total: 9 }), list: (o) => [], recall: async (q) => ({ results: [] }), get: () => null, update: () => ({ updated: true }), forget: () => ({ removed: true }), forgetRun: () => ({ softened: 1 }), restore: () => ({ restored: true }), forgottenList: () => [], integrate: async () => ({ skipped: true, reason: 'stub' }), importBackup: (p) => ({ ok: true, memories: 1, skipped: 0, profiles: 0, states: 0 }), profile: { list: () => [] }, state: { snapshot: () => ({ rendered: 'x' }) }, stats: () => ({ total: 9 }) },
+  memory: { forgetStats: () => ({ total: 9 }), list: (o) => [], recall: async (q) => ({ results: [] }), get: () => null, update: () => ({ updated: true }), forget: () => ({ removed: true }), forgetRun: () => ({ softened: 1 }), restore: () => ({ restored: true }), forgottenList: () => [], integrate: async () => ({ skipped: true, reason: 'stub' }), importBackup: (p) => ({ ok: true, memories: 1, skipped: 0, profiles: 0, states: 0 }), profile: { list: () => [] }, state: { snapshot: () => ({ rendered: 'x' }) }, stats: () => ({ total: 9 }),
+    //：关闭时释放 ollama 模型副本的模型名/地址来源（回归守卫依赖它）
+    describe: () => ({ dbPath: 'stub', model: 'shaw/dmeta-embedding-zh:latest', baseUrl: 'http://127.0.0.1:11434' }) },
   evolution: { view: (l) => ({ records: [] }), stats: () => ({ totalCandidates: 0 }), suggest: async () => ({ candidateIds: [] }), approve: async () => ({ applied: true }), reject: () => ({ rejected: true }), rollback: async () => ({ rolledBack: true }),
     //  人格一键凝练 stub（persona.distillPreview/Apply 走 ctx.evolution）
     distillPersona: async () => ({ token: 'stub-token', direction: '', at: Date.now(), before: { version: 1, total: 2, bySection: { identity: 0, values: 0, traits: 1, style: 0, directives: 1, capabilities: 0 } }, after: { total: 2, bySection: { identity: 0, values: 0, traits: 1, style: 0, directives: 1, capabilities: 0 } }, entries: [{ section: 'traits', content: '凝练后的条目', importance: 0.7, mergedFrom: ['a'] }] }),
@@ -119,6 +121,8 @@ const ctx = {
     configure: (a) => ({ enabled: a.enabled !== false, autoApply: a.autoApply === true }),
     run: async () => ({ ok: true }),
     model: async () => ({ installed: false, name: 'phi3:mini', sizeMb: 0 }),
+    //：关闭时释放 ollama 模型副本的本地模型名来源（无网络调用）
+    runtimeInfo: () => ({ phiModel: 'phi3:mini', ollamaBaseUrl: 'http://127.0.0.1:11434' }),
     modelDownload: async () => ({ started: true }),
     modelRemove: async () => ({ removed: true }),
     close: () => {},
@@ -176,7 +180,32 @@ check('models 显式传新密钥可覆盖', kept4.value.providers.length === 1 &
 check('models.setDeepSeekKey', (await call('models.setDeepSeekKey', { key: 'sk-x' })).value.saved === true);
 check('vision.config.get', (await call('vision.config.get')).ok === true);
 check('vision.config.set', (await call('vision.config.set', { baseURL: 'http://x/v1' })).value.saved === true);
-check('system.shutdown 保存并退出', (await call('system.shutdown')).ok === true);
+//：关闭时释放 ollama 模型副本（keep_alive=0）的回归守卫。
+// 只在该调用窗口内替换 globalThis.fetch，避免污染其它 op 的真实网络语义。
+// 守卫点：①确实发出 2 个卸载请求（embedding + phi，均 keep_alive=0）；
+//         ②只对 ollama 发请求，不结束任何进程（本脚本不 stub process.kill，若实现改成杀进程必然抛错）。
+const origFetch = globalThis.fetch;
+const unloadCalls = [];
+globalThis.fetch = async (url, init) => {
+  unloadCalls.push({ url: String(url), body: String(init?.body ?? '') });
+  return new Response('{"done":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+};
+const sd = await call('system.shutdown');
+const unloads = unloadCalls.filter((c) => c.url.endsWith('/api/generate'));
+const unloadNames = unloads.map((c) => { try { return JSON.parse(c.body).model; } catch { return null; } });
+const unloadSet = new Set(unloadNames);
+check('system.shutdown 保存并退出', sd.ok === true);
+check('关闭时释放 ollama 模型副本（embedding + phi，keep_alive=0）',
+  unloads.length === 2
+  && unloadSet.has('shaw/dmeta-embedding-zh:latest') && unloadSet.has('phi3:mini')
+  && unloads.every((c) => { try { return JSON.parse(c.body).keep_alive === 0; } catch { return false; } }),
+  unloadNames.join(' / '));
+check('释放只走 HTTP 卸载请求（不产生其它副作用）', unloadCalls.length === 2 && unloadCalls.every((c) => c.url.includes('11434')));
+// ollama 不可达（未运行/超时）时关闭仍必须成功——best-effort 语义守卫
+globalThis.fetch = async () => { throw new Error('ollama down'); };
+const sdNoOllama = await call('system.shutdown');
+globalThis.fetch = origFetch;
+check('ollama 不可达时关闭仍成功（best-effort，不阻断关闭）', sdNoOllama.ok === true);
 check('backup.list', (await call('backup.list')).ok === true);
 check('report.daily 无 LLM 时给出明确错误', (await call('report.daily')).error.message.includes('LLM'));
 check('memory.integrate', (await call('memory.integrate')).value.skipped === true);

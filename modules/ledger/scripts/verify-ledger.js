@@ -53,6 +53,38 @@ const p = api.listPrompts(10)[0];
 check('system 截断到 3000', [...p.system].length <= 3001 && p.system.endsWith('…'));
 check('url/status 字段保留', p.url.includes('chat/completions') && p.status === 'ok' && p.model === 'deepseek-v4-flash');
 
+// 3.5) 增量分页（ 性能修复）：面板每 2.5s 只拉新增，替代原"每次全量尾部 100 条"
+const pg1 = api.listPromptsPage(100);
+check('listPromptsPage 首次返回全量尾部 + 游标',
+  Array.isArray(pg1.items) && pg1.items.length === api.stats().prompts
+    && typeof pg1.next === 'number' && typeof pg1.oldest === 'number',
+  JSON.stringify({ n: pg1.items.length, next: pg1.next, oldest: pg1.oldest }));
+api.recordPrompt({ module: 'loop', user: '增量新增' });
+const pg2 = api.listPromptsPage(100, pg1.next);
+check('listPromptsPage 增量只回新增', pg2.items.length === 1 && pg2.items[0].user === '增量新增', `len=${pg2.items.length}`);
+check('seq 单调递增', pg2.items[0].seq > pg1.items[pg1.items.length - 1].seq,
+  `prev=${pg1.items[pg1.items.length - 1].seq} now=${pg2.items[0].seq}`);
+const pg3 = api.listPromptsPage(100, pg2.next);
+check('无新增时 items 为空且 next 不动（无变化守卫依据）', pg3.items.length === 0 && pg3.next === pg2.next,
+  JSON.stringify({ n: pg3.items.length, next: pg3.next, prevNext: pg2.next }));
+//  回归守卫（高危）：服务端重启后 promptSeq 归零，客户端旧游标必然大于服务端最新 seq。
+// 此时必须回退全量并重置游标——否则 fresh 恒空、next 原样回传，客户端既不替换也不追加，
+// 记录面板每次重启后静默停更（旧实现每轮全量拉取，天然自愈；改增量后丢掉该路径）。
+const pgReset = api.listPromptsPage(100, 999999);
+check('游标超前（模拟服务端重启）回退全量并重置游标',
+  pgReset.items.length > 0 && typeof pgReset.next === 'number' && pgReset.next < 999999,
+  JSON.stringify({ n: pgReset.items.length, next: pgReset.next }));
+check('旧接口 listPrompts 仍返回数组（向后兼容）', Array.isArray(api.listPrompts(10)) && api.listPrompts(10).length === 2);
+// errors 侧同理（含 level 过滤下的增量正确性）
+const ep1 = api.listErrorsPage({ limit: 100 });
+check('listErrorsPage 首次返回全量 + 游标',
+  ep1.items.length === api.stats().errors && typeof ep1.next === 'number' && typeof ep1.oldest === 'number',
+  JSON.stringify({ n: ep1.items.length, next: ep1.next }));
+api.recordError({ module: 'memory', level: 'warn', message: '增量告警' });
+const ep2 = api.listErrorsPage({ limit: 100, since: ep1.next, level: 'warn' });
+check('listErrorsPage 增量 + level 过滤只回新增', ep2.items.length === 1 && ep2.items[0].message === '增量告警', `len=${ep2.items.length}`);
+check('seq 在过滤视图下仍严格递增', ep2.items[0].seq > ep1.next, `seq=${ep2.items[0].seq} since=${ep1.next}`);
+
 // 4) 环形上限
 for (let i = 0; i < 60; i++) api.recordPrompt({ module: 'loop', user: `u${i}` });
 check('prompt 环形上限 50', api.stats().prompts === 50);

@@ -120,6 +120,11 @@ async function main() {
     assert('可疑档触发修订', log1.revisions.length >= 1 && log1.revisions[0].revised === 'REV-1', JSON.stringify(log1.revisions[0] ?? {}));
     const rm = api.revisionsMap().map;
     assert('渲染层 seqMap 标记 suspicious + 修订版', rm[22]?.v === 'suspicious' && rm[22]?.r === 'REV-1', JSON.stringify(rm[22]));
+    //：渲染层增量修订号——客户端据此在"map 未变"时跳过整段聊天重渲染
+    const rmFull = api.revisionsMap();
+    assert('渲染层 seqMap 带 rev 修订号', typeof rmFull.rev === 'number' && rmFull.rev > 0, `rev=${rmFull.rev}`);
+    const revAfterMid = rmFull.rev;
+    assert('无变动时 rev 保持不变', api.revisionsMap().rev === revAfterMid);
     st = api.state();
     assert('可疑不拦截不入拒收', st.stats.blocked === 0 && st.stats.suspicious === 1);
 
@@ -132,6 +137,7 @@ async function main() {
     assert('被驳回输出已存档（回收站）', log2.rejected.length >= 1 && log2.rejected[0].text.includes('[FAR]'));
     const rm2 = api.revisionsMap().map;
     assert('渲染层 seqMap 标记 blocked', rm2[23]?.v === 'blocked', JSON.stringify(rm2[23]));
+    assert('seqMap 变动后 rev 递增', api.revisionsMap().rev > revAfterMid, `rev=${api.revisionsMap().rev} prev=${revAfterMid}`);
     const sysMsgs = appended.filter((a) => a.type === 'user/message');
     const regenMsgs = appended.filter((a) => a.type === 'assistant/message');
     assert('追加了拦截说明', sysMsgs.length >= 1 && sysMsgs[0].data.content[0].text.includes('人格一致性拦截'));

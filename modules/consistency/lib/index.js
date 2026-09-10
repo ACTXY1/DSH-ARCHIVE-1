@@ -297,9 +297,15 @@ export function apply(ctx, rawConfig) {
     markDirty();
   }
 
+  //  性能修复：seqMap 修订号。渲染层每 15s 拉一次 revisionsMap，原实现拿到就无条件
+  // 替换 map 并触发整段聊天重渲染；实际 seqMap 变动远低于此频率。加 rev 后"没变就不重渲染"。
+  let seqRev = 0;
+
   function trimSeqMap() {
     const keys = Object.keys(st.seqMap).map(Number).sort((a, b) => a - b);
-    while (keys.length > 200) { const k = keys.shift(); delete st.seqMap[k]; }
+    let changed = false;
+    while (keys.length > 200) { const k = keys.shift(); delete st.seqMap[k]; changed = true; }
+    if (changed) seqRev += 1;
   }
 
   // ── LLM 调用（自定义 provider 优先，失败回退官方；与 loop/evolution 同款） ──
@@ -424,6 +430,7 @@ export function apply(ctx, rawConfig) {
     st.revisions.push({ t: Date.now(), seq, original: original.slice(0, 400), revised: revised.slice(0, 400) || '', g: round3(g) });
     if (st.revisions.length > 50) st.revisions.splice(0, st.revisions.length - 50);
     st.seqMap[seq] = { v: 'suspicious', r: revised || undefined };
+    seqRev += 1;
     trimSeqMap();
     markDirty();
   }
@@ -433,6 +440,7 @@ export function apply(ctx, rawConfig) {
     st.rejected.push({ t: Date.now(), seq, text: original.slice(0, 400), g: round3(g), corrected: false });
     if (st.rejected.length > 50) st.rejected.splice(0, st.rejected.length - 50);
     st.seqMap[seq] = { v: 'blocked' };
+    seqRev += 1;
     trimSeqMap();
     markDirty();
     appendSystem(session, `⛔ 人格一致性拦截：上一条回复被检测到人格严重突变（梯度 ${round3(g)} > 阈值 β ${round3(st.beta)}），已存档拒绝采用。正在按近期待办进化方向重新生成…`);
@@ -619,7 +627,7 @@ export function apply(ctx, rawConfig) {
       };
     },
     /** 渲染层用：会话消息 seq → 判定结果（suspicious 附修订版全文，blocked 标记）。 */
-    revisionsMap: () => ({ map: { ...st.seqMap }, alpha: st.alpha, beta: st.beta }),
+    revisionsMap: () => ({ map: { ...st.seqMap }, alpha: st.alpha, beta: st.beta, rev: seqRev }),
     /**  潜意识系统：最近 N 个轨迹点的文本摘要（供"自洽置信度"评估注入提示词）。 */
     trajectoryText: (n = 5) => {
       const k = Math.max(1, Math.min(30, Number(n) || 5));

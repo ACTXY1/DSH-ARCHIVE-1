@@ -37,6 +37,8 @@ window.__ModuleLoader__.load({
     //  性能优化：会话历史尾部初始页条数（60 条约 1.1MB，向上翻页 loadOlder 仍 100 条/次）。
     // 用户可经「↑ 加载更早消息」按钮/滚到顶部逐页上翻直至最早一条（hasMore=false 按钮消失），历史不截断。
     const HISTORY_PAGE = 60;
+    //  性能修复：总控记录面板每页条数（服务端按 seq 增量回传，客户端列表也按此上限裁剪）。
+    const LED_PAGE = 100;
     /** 事件内容块：assistant/message 的 content 在 data.message.content（嵌套），user/message 在 data.content（直接）——两者都要兼容（ 修复"AI 无应答"根因）。 */
     function blocksOf(ev) {
       const d = ev?.data;
@@ -575,6 +577,29 @@ window.__ModuleLoader__.load({
           sub ? e('div', { className: 'arc-note' }, sub) : null);
       }
 
+      /**
+       * 聊天输入框（ 性能修复）。
+       * 原实现 `draft` 挂在 App 上（L581 起的顶层组件，渲染代码近 2900 行，含侧边栏与整段聊天记录），
+       * 于是每敲一个键都触发 App 整棵树重渲染——单次按键阻塞主线程数十毫秒，表现为"在总控里打字明显卡顿"，
+       * 而 CPU 占用看起来却很低（按键是间歇的，2 秒均值把它摊平了）。
+       * 现在 draft 收进本组件内部：按键只重渲染这一个输入框，App 与聊天记录完全不动。
+       * 语义零改动：仍是受控输入、同样的 Enter 发送、同样的中文输入法合成（isComposing）守卫、同样的发送后清空。
+       * 放在 apply 作用域（而非 App 内部）是必须的——若定义在 App 里，每次渲染都会产生新组件类型导致输入框被卸载重建。
+       * props 多为 App 内联闭包（每次 App 渲染都是新引用），故 memo 的收益有限；真正的修复是状态隔离本身。
+       */
+      const ChatComposer = React.memo(function ChatComposer({ onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage }) {
+        const [draft, setDraft] = useState('');
+        const submit = () => { void sendText(draft).then((ok) => { if (ok) setDraft(''); }); };
+        return e('div', { className: 'arc-inp' },
+          e('button', { className: 'arc-img-btn', disabled: uploading, title: '上传/粘贴图片（AI 识别）', onClick: () => fileRef.current?.click() }, uploading ? '…' : '🖼️'),
+          e('input', { ref: fileRef, type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: { display: 'none' }, onChange: (ev) => { if (ev.target.files?.[0]) void uploadImage(ev.target.files[0]); ev.target.value = ''; } }),
+          e('input', { value: draft, placeholder: '输入消息，Enter 发送；可直接粘贴图片…', onChange: (ev) => setDraft(ev.target.value), onPaste, onKeyDown: (ev) => { if (ev.key === 'Enter' && !ev.nativeEvent?.isComposing) submit(); } }),
+          replying
+            ? e('button', { onClick: () => void stopGenerate() }, '⏹ 停止')
+            : e('button', { onClick: submit }, '发送'),
+        );
+      });
+
       // ================= 应用 =================
       function App() {
         const [page, setPage] = useState('chat');
@@ -584,7 +609,6 @@ window.__ModuleLoader__.load({
         const [wsExpanded, setWsExpanded] = useState({});
         const [archivedIds, setArchivedIds] = useState([]);
         const [messages, setMessages] = useState([]);
-        const [draft, setDraft] = useState('');
         const [model, setModel] = useState('');
         const [status, setStatus] = useState('连接中…');
         const [toast, setToast] = useState('');
@@ -624,6 +648,9 @@ window.__ModuleLoader__.load({
         //  人格一致性：会话消息 seq → 判定映射（suspicious 修订版 / blocked 拦截），渲染层替换显示
         const consistencyMapRef = useRef({});
         const lastConsistencyPullRef = useRef(0);
+        //  性能修复：一致性 seqMap 的修订号——与上次相同则跳过赋值与整段聊天重渲染。
+        // null 表示"尚无基线"，首次一定生效（服务端重启后 rev 归零也不会被误判为未变）。
+        const lastConsistencyRevRef = useRef(null);
         // 滚动粘连（ 修复"翻阅历史被拉回底部"）：用户上翻时停止自动滚底，回到底部后恢复；
         //  分页：滚到顶部时自动加载更早一页历史（hasMore 时），并保持视口位置。
         const stickRef = useRef(true);
@@ -636,7 +663,9 @@ window.__ModuleLoader__.load({
         const lastUnreadRef = useRef(0);
         const notifiedOnceRef = useRef(false);
 
-        const showToast = (t) => { setToast(t); setTimeout(() => setToast(''), 3500); };
+        //  性能修复：原为普通函数——App 每次重渲染都产生新引用，会击穿记录面板行组件的
+        // React.memo（App 侧 3s tick 等会频繁 setState）。依赖仅 setToast（useState 的稳定 setter）。
+        const showToast = useCallback((t) => { setToast(t); setTimeout(() => setToast(''), 3500); }, []);
         const askConfirm = (msg, onYes) => setConfirm({ msg, onYes });
         const stateRef = useRef({ currentId });
         stateRef.current.currentId = currentId;
@@ -1067,7 +1096,11 @@ window.__ModuleLoader__.load({
             if (Date.now() - lastConsistencyPullRef.current > 15000) {
               lastConsistencyPullRef.current = Date.now();
               const cr = await rpc('consistency.revisions');
-              if (cr.ok && cr.value?.map && typeof cr.value.map === 'object') {
+              //  性能修复：服务端为 seqMap 配了单调 rev，未变化时直接跳过。
+              // 原实现每 15s 无条件 renderChatRef → 重建全部消息对象并整段聊天重渲染。
+              const rev = (cr.ok && cr.value && typeof cr.value === 'object') ? (cr.value.rev ?? null) : null;
+              if (cr.ok && cr.value?.map && typeof cr.value.map === 'object' && rev !== lastConsistencyRevRef.current) {
+                lastConsistencyRevRef.current = rev;
                 consistencyMapRef.current = cr.value.map;
                 renderChatRef.current?.(stateRef.current.currentId);
               }
@@ -1517,14 +1550,7 @@ window.__ModuleLoader__.load({
                 pasteImgs.map((p) => e('div', { key: p.key, className: 'arc-paste-item' },
                   e('img', { src: p.thumb, alt: '待发送图片' }),
                   e('button', { className: 'arc-paste-x', title: '移除', onClick: () => setPasteImgs((prev) => prev.filter((x) => x.key !== p.key)) }, '✕')))),
-              e('div', { key: 'inp', className: 'arc-inp' },
-                e('button', { className: 'arc-img-btn', disabled: uploading, title: '上传/粘贴图片（AI 识别）', onClick: () => fileRef.current?.click() }, uploading ? '…' : '🖼️'),
-                e('input', { ref: fileRef, type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: { display: 'none' }, onChange: (ev) => { if (ev.target.files?.[0]) void uploadImage(ev.target.files[0]); ev.target.value = ''; } }),
-                e('input', { value: draft, placeholder: '输入消息，Enter 发送；可直接粘贴图片…', onChange: (ev) => setDraft(ev.target.value), onPaste, onKeyDown: (ev) => { if (ev.key === 'Enter' && !ev.nativeEvent?.isComposing) { void sendText(draft).then((ok) => { if (ok) setDraft(''); }); } } }),
-                replying
-                  ? e('button', { onClick: () => void stopGenerate() }, '⏹ 停止')
-                  : e('button', { onClick: () => { void sendText(draft).then((ok) => { if (ok) setDraft(''); }); } }, '发送'),
-              ),
+              e(ChatComposer, { key: 'inp', onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage }),
             ],
             e(LedgerDock, { showToast }),
           ),
@@ -3420,7 +3446,9 @@ window.__ModuleLoader__.load({
         const u = String(p?.user ?? '').trim();
         return (s ? `【系统提示】\n${s}\n` : '') + (u ? `【用户/场景】\n${u}` : '');
       }
-      function LedPromptRow({ item, showToast }) {
+      //  性能修复：React.memo 包裹。配合下方增量拉取（既有 item 的引用保持不变），
+      // 轮询到"无新增"或"只追加少量"时，已渲染的行零重渲染。
+      const LedPromptRow = React.memo(function LedPromptRow({ item, showToast }) {
         const [open, setOpen] = useState(false);
         const meta = ledMeta(item.module);
         const status = item.status || 'sent';
@@ -3437,8 +3465,8 @@ window.__ModuleLoader__.load({
               e('button', { className: 'arc-dock-btn', title: '复制完整提示词（含系统提示）', onClick: (ev) => { ev.stopPropagation(); void copyText(text || '(空)').then((ok) => showToast(ok ? '提示词已复制' : '复制失败')); } }, '复制'),
               e('button', { className: 'arc-dock-btn', title: open ? '收起' : '展开全文', onClick: () => setOpen(!open) }, open ? '收起' : '展开'))),
           open ? e('div', { className: 'arc-led-exp' }, text || '(空内容)') : null);
-      }
-      function LedErrorRow({ item, showToast }) {
+      });
+      const LedErrorRow = React.memo(function LedErrorRow({ item, showToast }) {
         const [open, setOpen] = useState(false);
         const meta = ledMeta(item.module);
         const tone = LED_LEVEL_TONE[item.level] || '#f87171';
@@ -3453,7 +3481,7 @@ window.__ModuleLoader__.load({
               e('button', { className: 'arc-dock-btn', title: '复制完整报错（含堆栈），可直接粘贴询问', onClick: (ev) => { ev.stopPropagation(); void copyText(full).then((ok) => showToast(ok ? '报错已复制' : '复制失败')); } }, '复制'),
               e('button', { className: 'arc-dock-btn', title: open ? '收起' : '展开堆栈', onClick: () => setOpen(!open) }, open ? '收起' : '展开'))),
           open && item.stack ? e('div', { className: 'arc-led-exp' }, item.stack) : null);
-      }
+      });
       function LedgerDock({ showToast }) {
         const [open, setOpen] = useState(false);
         const [tab, setTab] = useState('prompts');
@@ -3462,6 +3490,8 @@ window.__ModuleLoader__.load({
         const [counts, setCounts] = useState({ prompts: 0, errors: 0 });
         const [busy, setBusy] = useState(false);
         const [confirmClear, setConfirmClear] = useState(false);
+        //：增量游标（每个页签独立）。null = 尚无基线 → 首次全量拉取。
+        const sinceRef = useRef({ prompts: null, errors: null });
         const listRef = useRef(null);
         const nearBottomRef = useRef(true);
         // 展开高度写进 .arc-app 的 --arc-dock-h：toast 等 fixed 浮层上移避让，聊天/页面内容区由 flex 自动收缩
@@ -3478,16 +3508,41 @@ window.__ModuleLoader__.load({
         };
         const loadStats = useCallback(async () => {
           const r = await ledRpc('stats', {});
-          if (r.ok && r.value) setCounts({ prompts: r.value.prompts ?? 0, errors: r.value.errors ?? 0 });
+          if (r.ok && r.value) {
+            // 无变化守卫：计数未变时返回同一个对象引用，React 直接跳过本次重渲染
+            const np = r.value.prompts ?? 0;
+            const ne = r.value.errors ?? 0;
+            setCounts((prev) => (prev.prompts === np && prev.errors === ne) ? prev : { prompts: np, errors: ne });
+          }
         }, []);
+        //  性能修复（本次控制台卡顿的根因）：原实现每 2.5s 全量拉取尾部 100 条
+        // （实测 599KB/次，单条最大 9.4KB）并整体替换数组 → 100 行每轮都拿到全新对象，memo 无从生效，
+        // 且每行重算 promptTextOf（对最多 9000 字做 trim+拼接）与 800 字 title，主线程每轮被占用
+        // 数十毫秒，表现为整个控制台"打字卡、点选卡"。
+        // 现改为按 seq 增量续拉：无新增时一个 state 都不碰；有新增时只追加，旧 item 引用保持不变，
+        // 配合行组件的 React.memo 使已渲染行零重渲染。
+        // 兜底（保留"断线后能补齐"语义）：首次(since=null)、服务端重启(next 回退)、
+        // 环形挤出导致断档(since < oldest-1) → 一律回退全量替换。
         const loadLists = useCallback(async () => {
           setBusy(true);
           try {
             const op = tab === 'prompts' ? 'prompts.list' : 'errors.list';
-            const r = await ledRpc(op, { limit: 100 }); //：轮询限 100 条，控制 2.5s/次的全量传输载荷
-            if (r.ok) {
-              if (tab === 'prompts') setPrompts(r.value?.items ?? []);
-              else setErrors(r.value?.items ?? []);
+            const since = sinceRef.current[tab] ?? null;
+            const r = await ledRpc(op, since === null ? { limit: LED_PAGE } : { limit: LED_PAGE, since });
+            if (r.ok && r.value) {
+              const items = Array.isArray(r.value.items) ? r.value.items : [];
+              const next = typeof r.value.next === 'number' ? r.value.next : null;
+              const oldest = typeof r.value.oldest === 'number' ? r.value.oldest : null;
+              const full = since === null || next === null
+                || next < since
+                || (oldest !== null && since < oldest - 1);
+              if (full) {
+                if (tab === 'prompts') setPrompts(items); else setErrors(items);
+              } else if (items.length > 0) {
+                const merge = (prev) => prev.concat(items).slice(-LED_PAGE);
+                if (tab === 'prompts') setPrompts(merge); else setErrors(merge);
+              }
+              if (next !== null) sinceRef.current[tab] = next;
             }
             await loadStats();
           } catch { /* 单次刷新失败不阻断 */ }
@@ -3518,6 +3573,7 @@ window.__ModuleLoader__.load({
           if (r.ok) {
             setConfirmClear(false);
             if (tab === 'prompts') setPrompts([]); else setErrors([]);
+            sinceRef.current[tab] = null; //：清空后重置游标，下一轮走全量基线
             void loadStats();
             showToast(`已清空${tab === 'prompts' ? '提示词' : '报错'}记录（文件与内存）`);
           } else showToast(`清空失败：${r.error}`);

@@ -49,6 +49,50 @@ let backupInFlight = false;
  * 单纯 in-flight 守卫拦不住连点/重复调用 → 用 3s 时间窗去重，任何分发模型下都生效）。
  */
 let lastBackupAt = 0;
+/**
+ *：关闭时释放本项目在 ollama 中加载的模型副本（keep_alive=0），
+ * 让显存/内存在关闭那一刻就归还，而不是等 ollama 默认 5 分钟空闲后自行卸载。
+ * 边界（务必保持，勿改成"结束 ollama 进程"）：
+ *   - 只发 HTTP 卸载请求，绝不结束 ollama 进程；
+ *   - 模型名取自本项目自身服务（memory.describe / subconscious.runtimeInfo），此处不硬编码，
+ *     配置改了自动跟随；
+ *   - 该 ollama 可能是系统安装版并被其它程序共用：其它程序的模型一律不碰，
+ *     它们最多在下次使用时多付一次本地自动加载；
+ *   - 纯尽力而为：单请求 2s 超时，失败只减少返回项，绝不抛错阻断关闭。
+ * 已在本机实测：对未加载的模型发 keep_alive:0 不会触发加载；对已加载模型即时卸载生效。
+ * @param {object} ctx Cordis 上下文
+ * @returns {Promise<string[]>} 已收到成功响应的模型名（用于诊断输出）
+ */
+async function releaseOllamaModels(ctx) {
+  const targets = new Set();
+  let baseUrl = '';
+  try {
+    const info = ctx.memory?.describe?.();
+    if (info?.model) targets.add(String(info.model));
+    if (info?.baseUrl) baseUrl = String(info.baseUrl);
+  } catch { /* 服务不可用：跳过该来源，不影响其它来源 */ }
+  try {
+    const info = ctx.subconscious?.runtimeInfo?.();
+    if (info?.phiModel) targets.add(String(info.phiModel));
+    if (!baseUrl && info?.ollamaBaseUrl) baseUrl = String(info.ollamaBaseUrl);
+  } catch { /* 同上 */ }
+  if (targets.size === 0) return [];
+  const base = (baseUrl || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const released = [];
+  await Promise.allSettled([...targets].map(async (model) => {
+    try {
+      const res = await fetch(`${base}/api/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model, prompt: '', keep_alive: 0 }),
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) released.push(model);
+    } catch { /* ollama 未运行/超时：卸载失败不影响关闭 */ }
+  }));
+  return released;
+}
+
 /** 每日简报生成提示词。 */
 const REPORT_PROMPT = `你是 DSH-ARCHIVE 的每日简报助手。根据提供的"最近 24 小时"素材（自循环决策、主动发言、记忆统计、通知、定时任务），生成一份简洁中文简报：
 1. 一句话总结（今天 AI 的整体状态）；
@@ -757,6 +801,13 @@ export function apply(ctx, rawConfig) {
       try { ctx.consistency?.close?.(); } catch { /* ignore */ }
       //：潜意识状态（潜记忆池/草案/呓语）flush
       try { ctx.subconscious?.close?.(); } catch { /* ignore */ }
+      //：释放本项目在 ollama 中加载的模型副本（详见 releaseOllamaModels 注释）。
+      // 位置：各服务 close 之后、进程退出之前，好让 ollama 尚能收到请求；失败不影响关闭。
+      try {
+        const releasedModels = await releaseOllamaModels(ctx);
+        if (releasedModels.length > 0) bootLine(`[archive-control] 已释放 ollama 模型副本：${releasedModels.join(', ')}`);
+        else bootLine('[archive-control] 未释放 ollama 模型副本（ollama 未运行 / 模型未加载 / 请求失败，均不影响关闭）');
+      } catch { /* 释放异常不影响关闭 */ }
       //：关闭按钮 = 完全退出 —— 顺带关闭系统托盘（tray.ps1 独立进程）。
       // tray.pid 由 tray.ps1 写入两行：PID / 进程名；按名校验防 PID 复用误杀；
       // 每步带 bootLine 诊断输出；pid 文件无论 kill 成败都删除（避免残留）。

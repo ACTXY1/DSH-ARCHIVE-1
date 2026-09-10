@@ -705,6 +705,12 @@ export function apply(ctx, rawConfig) {
     /** 手动触发一次梦境引擎（测试/演示；与睡眠期触发同路径）。 */
     run: () => runDreamEngine(),
     model: () => modelStatus(),
+    /**
+     * 运行时信息（无网络调用）：本项目会加载的本地模型名 + ollama 地址。
+     *：作为关闭流程释放显存副本（keep_alive=0）的模型名唯一事实源，
+     * 避免 control 侧硬编码模型名后在配置变更时失配。
+     */
+    runtimeInfo: () => ({ phiModel: config.phiModel, ollamaBaseUrl: config.ollamaBaseUrl }),
     modelDownload,
     modelRemove,
     /** 测试入口：直接生成呓语。 */

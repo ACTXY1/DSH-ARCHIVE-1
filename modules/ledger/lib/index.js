@@ -22,7 +22,12 @@
  * 存储：内存环形缓冲（promptCap/errorCap，各默认 400，最新在后）+ 批量落盘
  * data/ledger/prompts.jsonl、errors.jsonl（flushMs 合并写，防失败风暴同步 IO），
  * 启动时按 fileLineCap 裁剪。RPC：/archive-ledger（prompts.list/errors.list/stats/clear/errors.push）。
- * 服务：ctx.archiveLedger.recordPrompt/recordError（供 control RPC dispatch catch 等转发）。
+ * 服务：ctx.archiveLedger.recordPrompt/recordError（供 control RPC dispatch catch 等转发）、
+ * listPrompts/listErrors（旧·返回数组）、listPromptsPage/listErrorsPage（新·增量，返回 {items,next,oldest}）。
+ *
+ * 增量（ 性能修复）：每条记录带进程内单调递增 seq；prompts.list/errors.list 接受 since，
+ * 只回传 seq > since 的记录。原实现每次全量回传尾部 100 条（实测 599KB），面板 2.5s 一轮导致
+ * 浏览器主线程持续阻塞。
  *
  * 配置（cordis.patch.yml 行 config，绝对路径分发时随文档改）：
  *  - dataPath:     账本目录（默认 <cwd>/data/ledger）
@@ -69,6 +74,35 @@ function bootLine(line) {
 }
 
 /* ---------- 归源辅助 ---------- */
+
+/**
+ * 账本分页（ 性能修复）。since 为上次返回的 next，即"客户端已完整持有到哪个 seq"。
+ * 返回 { items, next, oldest }：
+ *  - items  本次新增（至多 limit 条）；since 缺失/非法时退化为"尾部 limit 条"全量（首次加载与兜底路径）
+ *  - next   下次应传的 since；无新增时原样返回 since
+ *  - oldest 服务端当前仍保留的最早 seq（客户端据此判定环形挤出导致的断档 → 回退全量）
+ * 设计取舍：任一记录缺 seq（理论上不会发生，内存环只装本进程写入的记录）时整体退化为全量，
+ * 宁可多发一次也不静默丢记录——符合本模块"不可能有遗漏"的设计初衷。
+ */
+function pageRecords(arr, limit, since, level) {
+  const cap = limit || 200;
+  const view = level ? arr.filter((x) => x.level === level) : arr;
+  if (view.some((x) => typeof x.seq !== 'number')) {
+    const items = arr.filter((x) => !level || x.level === level).slice(-cap);
+    return { items, next: null, oldest: null };
+  }
+  const oldest = view.length > 0 ? view[0].seq : 0;
+  const last = view.length > 0 ? view[view.length - 1].seq : 0;
+  if (!Number.isFinite(since)) return { items: view.slice(-cap), next: last, oldest };
+  // 服务端重启（seq 归零）守卫：游标比服务端最新 seq 还大 → 判定为重启，回退全量并把游标重置为 last。
+  // 缺此判断时 fresh 恒为空、next 原样回传 since，客户端既不等（next < since 不成立）也不追加，
+  // 游标永久停在一个不可能被超越的值上 → 记录面板每次重启后静默停更（旧实现每轮全量拉取，天然自愈；
+  // 改增量后必须显式处理）。重启后 next < since 亦满足客户端既有的"回退全量"分支，无需改客户端。
+  if (since > last) return { items: view.slice(-cap), next: last, oldest };
+  const fresh = view.filter((x) => x.seq > since);
+  const items = fresh.slice(-cap);
+  return { items, next: items.length > 0 ? items[items.length - 1].seq : since, oldest };
+}
 
 /** 文本截断（按码点，避免切断代理对/emoji）。 */
 function trunc(s, n) {
@@ -142,6 +176,10 @@ export function apply(ctx, rawConfig) {
 
   const prompts = [];   // 内存环形（最新在后）
   const errors = [];
+  //  增量游标：每条记录分配进程内单调递增的 seq，供总控记录面板"只拉新增"用。
+  // 重启后 seq 从 1 重新计数——客户端靠 next 回退（next < since）自行判定并回退全量，无需额外握手。
+  let promptSeq = 0;
+  let errorSeq = 0;
   const queuedPrompt = []; // 待落盘行
   const queuedError = [];
   let flushTimer = null;
@@ -177,6 +215,7 @@ export function apply(ctx, rawConfig) {
   const recordPrompt = (r = {}) => {
     const rec = {
       id: recId(),
+      seq: ++promptSeq,
       t: Date.now(),
       module: r.module || 'core',
       model: trunc(r.model, 100),
@@ -197,6 +236,7 @@ export function apply(ctx, rawConfig) {
   const recordError = (r = {}) => {
     const rec = {
       id: recId(),
+      seq: ++errorSeq,
       t: Date.now(),
       module: r.module || 'core',
       level: r.level || 'error', // warn|error|uncaught|unhandled|rpc|client
@@ -221,12 +261,12 @@ export function apply(ctx, rawConfig) {
       promptCap: cfg.promptCap,
       errorCap: cfg.errorCap,
     }),
-    listPrompts: (limit) => prompts.slice(-(limit || 200)),
-    listErrors: (opts = {}) => {
-      let arr = errors;
-      if (opts.level) arr = arr.filter((x) => x.level === opts.level);
-      return arr.slice(-(opts.limit || 200));
-    },
+    // 旧接口（返回数组）语义不变，verify-ledger.js 与任何外部调用零改动。
+    listPrompts: (limit) => pageRecords(prompts, limit).items,
+    listErrors: (opts = {}) => pageRecords(errors, opts.limit, undefined, opts.level).items,
+    // 新增增量接口（返回 { items, next, oldest }）：since 非有限数时为"尾部 limit 条"的全量兜底。
+    listPromptsPage: (limit, since) => pageRecords(prompts, limit, since),
+    listErrorsPage: (opts = {}) => pageRecords(errors, opts.limit, opts.since, opts.level),
     clear: (kind) => {
       if (kind === 'prompts' || kind === 'all') {
         prompts.length = 0; queuedPrompt.length = 0;
@@ -447,8 +487,8 @@ export function apply(ctx, rawConfig) {
           try {
             let value;
             if (op === 'stats') value = api.stats();
-            else if (op === 'prompts.list') value = { items: api.listPrompts(args.limit) };
-            else if (op === 'errors.list') value = { items: api.listErrors({ limit: args.limit, level: args.level }) };
+            else if (op === 'prompts.list') value = api.listPromptsPage(args.limit, args.since);
+            else if (op === 'errors.list') value = api.listErrorsPage({ limit: args.limit, level: args.level, since: args.since });
             else if (op === 'prompts.clear') value = api.clear('prompts');
             else if (op === 'errors.clear') value = api.clear('errors');
             else if (op === 'errors.push') {
