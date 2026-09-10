@@ -84,12 +84,12 @@ function toolOutput(schema, render) {
 
 /**
  * 工具输出裁剪：只保留 schema 声明字段。
- * 背景（2026-08-30 验收发现）：execute 返回完整数据行（id/source/createdAt/…），
+ * 背景（ 验收发现）：execute 返回完整数据行（id/source/createdAt/…），
  * 而 output schema 声明 additionalProperties:false 且未列出这些字段 →
  * agent 运行时校验拒绝（INVALID_TOOL_OUTPUT），工具对 agent 不可用。
  */
 function pickFields(obj, keys) {
-  // 2026-08-30 审计修复：过滤 null 与 undefined——可选字段（detail/evidence 等）未传时
+  //  过滤 null 与 undefined——可选字段（detail/evidence 等）未传时
   // 存储层返回 null，而 schema 声明 string → INVALID_TOOL_OUTPUT（实测 user_state_set 未传 detail 即失败）。
   const out = {};
   for (const k of keys) if (obj[k] !== undefined && obj[k] !== null) out[k] = obj[k];
@@ -100,7 +100,7 @@ const TOOL_STATE_FIELDS = ['state', 'detail', 'confidence', 'evidence', 'setAt',
 const TOOL_RECALL_FIELDS = ['id', 'content', 'kind', 'importance', 'score', 'createdAt', 'relativeTime', 'stale', 'protected', 'tags'];
 
 /** 启动就绪行：写 stdout，便于 CLI 长驻进程的可观测与自动化验证（logger 默认级别可能不打印 info）。 */
-/** 记忆整合作业提示词（2026-08-30：把一段时间的同类自循环决策凝练为一条语义记忆）。 */
+/** 记忆整合作业提示词（把一段时间的同类自循环决策凝练为一条语义记忆）。 */
 const INTEGRATE_PROMPT = `你是记忆整理助手。下面是一段时间内的多条 AI 自循环决策记录（<loop-decision>…</loop-decision>）。
 请把它们凝练成 1 条概括性语义记忆（中文，自包含陈述式，150 字以内），涵盖：这段时间 AI 的整体状态/反复出现的模式/值得记住的结论。
 只输出概括正文，不要多余文字、不要编号。如果内容高度重复（如大量"安静待命"），概括时明确指出重复模式即可。`;
@@ -128,7 +128,7 @@ export function apply(ctx, rawConfig) {
     stats: () => core.stats(),
     health: () => core.health(),
     describe: () => ({ dbPath: core.dbPath, model: core.embedder.model, baseUrl: core.embedder.baseUrl }),
-    // 2026-08-31 人格一致性校验器（dsh-archive-consistency）复用同源 ollama embedding：
+    //  人格一致性校验器（dsh-archive-consistency）复用同源 ollama embedding：
     // 供一致性模块提取"人格状态"向量（同一模型/端点，零重复配置）。
     embed: (input) => core.embedder.embed(input),
     // 仿生遗忘
@@ -136,11 +136,11 @@ export function apply(ctx, rawConfig) {
     restore: (id) => core.restore(id),
     forgottenList: (limit) => core.forgottenList(limit),
     forgetStats: () => core.forgetStats(),
-    // WAL checkpoint（2026-08-30：定时 + 备份前调用，断电/强杀恢复更稳）
+    // WAL checkpoint（定时 + 备份前调用，断电/强杀恢复更稳）
     checkpoint: () => core.checkpoint(),
-    // 关闭数据库连接（2026-08-30：整体恢复前释放文件锁）
+    // 关闭数据库连接（整体恢复前释放文件锁）
     close: () => { try { core.close(); } catch { /* 已关闭 */ } },
-    // 记忆整合 / 备份导入（2026-08-30）
+    // 记忆整合 / 备份导入
     integrate: (opts) => api.integrate(opts),
     importBackup: (path) => core.importFrom(path),
     // 用户画像（长期稳定事实）
@@ -164,7 +164,7 @@ export function apply(ctx, rawConfig) {
   };
   ctx.provide('memory', api);
 
-  // 对话记忆自动落库（2026-08-30 用户反馈"记忆系统不更新、找不到对话的记忆"）：
+  // 对话记忆自动落库（ 用户反馈"记忆系统不更新、找不到对话的记忆"）：
   // 把每条真实用户输入写入记忆（source='conversation'，kind='episodic'，tag conversation），跨会话可召回。
   // 过滤：仅 source.kind==='user' —— dsh 每回合注入的 runtime-context 快照是 kind='plugin'（含 sandbox/approval/<time>/<persona>/记忆注入），
   // 不落库；零 LLM 成本，不打断对话。记忆按重要度 0.45 不设保护，交由仿生遗忘自然老化。
@@ -172,14 +172,14 @@ export function apply(ctx, rawConfig) {
     const blocks = Array.isArray(data?.content) ? data.content : [];
     const texts = blocks.filter((b) => b.type === 'text').map((b) => String(b.text ?? '').trim()).filter(Boolean);
     if (texts.length > 0) return texts.join('\n');
-    // 2026-08-31 审计修复：与 loop 模块 contentTextOf 对齐——纯字符串形态的 content 也要解析
+    //  与 loop 模块 contentTextOf 对齐——纯字符串形态的 content 也要解析
     if (blocks.length === 0 && typeof data?.content === 'string') return String(data.content).trim();
     if (blocks.some((b) => b.type === 'image')) return '[图片]';
     return '';
   }
 
   /**
-   * 用户状态维护（2026-08-30 改版）：
+   * 用户状态维护（ 改版）：
    * 此前为系统关键词确定性感知（STATE_RULES 正则匹配用户消息，实测不稳定：同义词/反语/复合语境误判）。
    * 现改为 AI 隐式推断：由 systemPrompt 注入的 user-state-maintenance 指令要求 AI 每回合
    * 读取注入的当前状态 → 结合本条用户消息隐式推断 → 仅在状态变化时调用 user_state_set/clear 修正
@@ -201,7 +201,7 @@ export function apply(ctx, rawConfig) {
 
 
   // 每回合注入"当前用户状态 + 画像要点"（systemPrompt 动态 context，函数式 text 每次组装求值）。
-  // 2026-08-30 改版：注入后附 user-state-maintenance 指令——要求 AI 读取已注入状态后，
+  //  改版：注入后附 user-state-maintenance 指令——要求 AI 读取已注入状态后，
   // 在输出对话前隐式推断用户状态，变化时用 user_state_set/clear 修正（替代原关键词自动感知）。
   try {
     ctx.systemPrompt.context({
@@ -460,16 +460,16 @@ export function apply(ctx, rawConfig) {
         },
       }),
       execute(args) {
-        // 2026-08-31 审计修复：仅状态名集合实质变化才 emit（同值状态刷新 TTL 不触发，
+        //  仅状态名集合实质变化才 emit（同值状态刷新 TTL 不触发，
         // 避免每次无效调用都驱动一次完整循环浪费 token）；payload 用落库 trim 后的 state。
-        // 2026-09-03：比较与发射均用归一化后的规范名（'sleeping' 与 '睡眠中' 视为同一状态）。
+        //：比较与发射均用归一化后的规范名（'sleeping' 与 '睡眠中' 视为同一状态）。
         const want = canonicalState(args.state);
         const existed = core.stateGet().some((s) => canonicalState(s.state) === want);
         const r = pickFields(core.stateSet({
           state: args.state, detail: args.detail, confidence: args.confidence,
           evidence: args.evidence, ttlSeconds: args.ttlSeconds,
         }), ['state', 'detail', 'confidence', 'setAt', 'expiresAt']);
-        // 2026-08-30 审计修复：状态变化事件发射（此前 loop 监听 archive/state-changed 却无发射方——死链）。
+        //  状态变化事件发射（此前 loop 监听 archive/state-changed 却无发射方——死链）。
         // 仅工具入口发射（agent/用户外部动作）；loop 内部动作走服务层不发射，避免"设状态→触发循环"自激。
         if (!existed) { try { ctx.emit('archive/state-changed', { action: 'set', state: String(r?.state ?? want) }); } catch { /* 通知失败不阻断 */ } }
         return r;
@@ -501,8 +501,8 @@ export function apply(ctx, rawConfig) {
       }),
       execute() {
         const snap = core.snapshotData();
-        // 2026-08-30 审计修复：snap.rendered 无状态/画像时可能为 null，与 schema 的 string 类型冲突 → 兜底空串
-        // 2026-09-03：返回状态名统一归一化（sleeping→睡眠中，active→在线）
+        //  snap.rendered 无状态/画像时可能为 null，与 schema 的 string 类型冲突 → 兜底空串
+        //：返回状态名统一归一化（sleeping→睡眠中，active→在线）
         return { states: (snap.states ?? []).map((s) => pickFields({ ...s, state: canonicalState(s.state) }, TOOL_STATE_FIELDS)), rendered: snap.rendered ?? '' };
       },
     }));
@@ -516,8 +516,8 @@ export function apply(ctx, rawConfig) {
       }),
       execute(args) {
         const r = core.stateClear(args.state);
-        // 2026-08-30 审计修复：状态变化事件发射（同 user_state_set，仅工具入口）。
-        // 2026-08-31：仅实际清除（removed=true）才发射（清一个不存在的状态不触发循环）
+        //  状态变化事件发射（同 user_state_set，仅工具入口）。
+        //：仅实际清除（removed=true）才发射（清一个不存在的状态不触发循环）
         if (r?.removed === true) { try { ctx.emit('archive/state-changed', { action: 'clear', state: canonicalState(args.state) }); } catch { /* 通知失败不阻断 */ } }
         return r;
       },
@@ -535,10 +535,10 @@ export function apply(ctx, rawConfig) {
   logger.info(`archive-memory: ready db=${core.dbPath} model=${core.embedder.model} total=${stats.total}`);
   bootLine(`[archive-memory] ready db=${core.dbPath} model=${core.embedder.model} total=${stats.total} profile=${profileStats.total} state=${stateStats.active}`);
 
-  // 记忆整合（2026-08-30）：把一段时间内的自循环 thought 凝练为一条语义记忆，原条目标记软遗忘。
+  // 记忆整合：把一段时间内的自循环 thought 凝练为一条语义记忆，原条目标记软遗忘。
   // 自动每日最多一次（thought≥12 才执行，省 token）；也可由记忆页按钮手动触发。
   // 保护兼容：listBySourceSince 仅取未保护记忆——受保护记忆不参与聚合、不被凝练、不被软遗忘。
-  // 2026-08-30 修复：in-flight 守卫——手动按钮与每日自动定时器可能并发，防重复整合/重复软遗忘。
+  //  修复：in-flight 守卫——手动按钮与每日自动定时器可能并发，防重复整合/重复软遗忘。
   let integrateInFlight = false;
   api.integrate = async ({ windowMs = 24 * 3600000 } = {}) => {
     if (integrateInFlight) return { skipped: true, reason: '整合进行中，请稍候' };
@@ -558,7 +558,7 @@ export function apply(ctx, rawConfig) {
       });
       for await (const chunk of stream) {
         if (chunk.type === 'text-delta') text += chunk.text;
-        // 2026-08-31 审计修复：aborted 同样判失败（与 loop/subconscious/consistency 一致）——
+        //  aborted 同样判失败（与 loop/subconscious/consistency 一致）——
         // 否则中止后半截内容会被当成最终摘要写入并软遗忘全部原条目（不可逆损伤）
         if (chunk.type === 'finish' && (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted')) {
           throw new Error(`${chunk.reason.failure?.code ?? chunk.reason.kind}: ${chunk.reason.failure?.message ?? '调用失败'}`);
@@ -576,7 +576,7 @@ export function apply(ctx, rawConfig) {
   };
 
   // 自动整合（每日最多一次；6h 检查一次）
-  // 2026-08-31：首检提前（lastIntegrateAt 置 24h 前 + 启动立即检查一次）——窗口内 loop thought ≥12 才真正执行，
+  //：首检提前（lastIntegrateAt 置 24h 前 + 启动立即检查一次）——窗口内 loop thought ≥12 才真正执行，
   // 不足则 skipped（无 token 浪费），便于验证合并功能；此后保持每日最多一次。
   let lastIntegrateAt = Date.now() - 24 * 3600000;
   const checkIntegrate = async () => {
@@ -591,7 +591,7 @@ export function apply(ctx, rawConfig) {
   ctx.timer.setInterval(checkIntegrate, 6 * 3600000);
   void checkIntegrate();
 
-  // 自动仿生遗忘（2026-08-31 用户需求 B：每日最多一次，与整合节奏一致；受保护记忆豁免，
+  // 自动仿生遗忘（ 用户需求 B：每日最多一次，与整合节奏一致；受保护记忆豁免，
   // Ebbinghaus 衰减重算强度 + 软遗忘/归档分级 + 待复核队列；启动 24h 内不自动执行，保守起见）
   let lastForgetRunAt = Date.now();
   ctx.timer.setInterval(() => {
@@ -610,7 +610,7 @@ export function apply(ctx, rawConfig) {
     try { core.close(); } catch { /* 已关闭 */ }
   });
 
-  // 2026-08-31 审计修复：过期用户状态定期清扫（此前 sweep 仅服务层暴露、无任何调用方——
+  //  过期用户状态定期清扫（此前 sweep 仅服务层暴露、无任何调用方——
   // 不同状态名无限累积，行数只增不减）
   ctx.timer.setInterval(() => {
     try { const n = core.stateSweep(); if (n > 0) logger.info(`archive-memory: 清扫过期用户状态 ${n} 条`); } catch { /* 清扫失败不阻断 */ }

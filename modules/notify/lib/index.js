@@ -1,5 +1,5 @@
 /**
- * dsh-archive-notify —— DSH-ARCHIVE 主动消息通道（Cordis 插件，阶段五）。
+ * dsh-archive-notify —— DSH-ARCHIVE 主动消息通道（Cordis 插件）。
  *
  * 可插拔通道：
  *  - 默认：长驻进程控制台输出（[archive-notify] 时间 [来源] 内容）+ 通知流水
@@ -23,7 +23,7 @@ const DEFAULTS = {
   notificationsPath: join(process.cwd(), 'data', 'notifications.jsonl'),
   consoleEnabled: true,
   minIntervalMs: 30000,
-  cleanupRetentionDays: 7, // 已读通知保留天数（2026-08-30：防数据无限增长；未读永不清理）
+  cleanupRetentionDays: 7, // 已读通知保留天数（防数据无限增长；未读永不清理）
 };
 
 function normalizeConfig(raw = {}) {
@@ -47,7 +47,7 @@ export function apply(ctx, rawConfig) {
   const config = normalizeConfig(rawConfig);
   const logger = ctx.root?.logger?.('archive-notify') ?? console;
   mkdirSync(dirname(config.notificationsPath), { recursive: true });
-  // 2026-08-30：限频按来源组分别计数——loop 主动发言与 schedule 定时提醒互不挤兑；
+  //：限频按来源组分别计数——loop 主动发言与 schedule 定时提醒互不挤兑；
   // 防刷屏只针对同一来源组（loop 连续发言、schedule 连续提醒）。组规则：loop*→loop，schedule*→schedule，其余→other。
   const lastSendAtByGroup = new Map();
   const groupOf = (source) => {
@@ -66,7 +66,7 @@ export function apply(ctx, rawConfig) {
       .reverse();
   }
 
-  /** 2026-08-31 审计：整文件重写改原子写（tmp+rename）——强杀/断电不再截断通知文件。 */
+  /**  整文件重写改原子写（tmp+rename）——强杀/断电不再截断通知文件。 */
   function rewrite(lines) {
     const tmp = `${config.notificationsPath}.tmp-${process.pid}`;
     writeFileSync(tmp, lines.join('\n') + '\n', 'utf8');
@@ -79,7 +79,7 @@ export function apply(ctx, rawConfig) {
      * @param {object} input {content, source?, scope?}
      * @param {string} [input.scope] 'chat'（AI 对用户说的话/用户要求的提醒 → 可注入总会话对话流）
      *   | 'panel'（系统状态/操作流水 → 仅通知流水与总控「通知」页，绝不注入对话流）。默认 'panel'。
-     *   2026-09-03 分级：此前全部记录都被 control 注入主会话对话流，机器状态文案（主动行动/自进化/提醒错过等）
+     *    分级：此前全部记录都被 control 注入主会话对话流，机器状态文案（主动行动/自进化/提醒错过等）
      *   会以"AI 普通回复"样式泄露进用户对话（出戏）。chat 级仅限 AI 面向用户的自然消息。
      * @returns {{sent:boolean, at:number, limited:boolean}}
      */
@@ -89,7 +89,7 @@ export function apply(ctx, rawConfig) {
       const source = String(input.source ?? 'system').slice(0, 60);
       const scope = input.scope === 'chat' ? 'chat' : 'panel';
       const now = Date.now();
-      // 按来源组限频（2026-08-30：loop 发言与 schedule 提醒互不挤兑）
+      // 按来源组限频（loop 发言与 schedule 提醒互不挤兑）
       const group = groupOf(source);
       const lastAt = lastSendAtByGroup.get(group) ?? 0;
       if (now - lastAt < config.minIntervalMs) return { sent: false, at: now, limited: true, group };
@@ -132,7 +132,7 @@ export function apply(ctx, rawConfig) {
       return { total: all.length, unread: all.filter((n) => !n.read).length, path: config.notificationsPath, minIntervalMs: config.minIntervalMs };
     },
 
-    /** 清空全部已读通知（未读保留；2026-08-30 通知页"清空已读"）。 */
+    /** 清空全部已读通知（未读保留； 通知页"清空已读"）。 */
     clearRead() {
       if (!existsSync(config.notificationsPath)) return { removed: 0 };
       const lines = readFileSync(config.notificationsPath, 'utf8').split('\n').filter(Boolean);
@@ -148,7 +148,7 @@ export function apply(ctx, rawConfig) {
       return { removed };
     },
 
-    /** 清理超期已读通知（2026-08-30）：read=true 且超过保留期删除；未读永不清理（用户可能要看）。 */
+    /** 清理超期已读通知：read=true 且超过保留期删除；未读永不清理（用户可能要看）。 */
     cleanup() {
       const cutoff = Date.now() - config.cleanupRetentionDays * 86400000;
       if (!existsSync(config.notificationsPath)) return { removed: 0 };

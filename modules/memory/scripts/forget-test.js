@@ -1,4 +1,4 @@
-// 仿生遗忘系统单测：保护自动判定、强度衰减、软遗忘、归档、恢复、审计
+// 仿生遗忘系统单测：保护自动判定、强度衰减、软遗忘、归档、恢复、
 import { rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

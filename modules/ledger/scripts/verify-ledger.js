@@ -1,4 +1,4 @@
-// dsh-archive-ledger 单元自检（阶段六）：验证五路采集中的宿主侧逻辑（logger/console 包裹、
+// dsh-archive-ledger 单元自检（）：验证五路采集中的宿主侧逻辑（logger/console 包裹、
 // 环形存储、清空、批量落盘、fetch 分类归源）。真实 ctx/llm/connection 集成在实机验收阶段验证。
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

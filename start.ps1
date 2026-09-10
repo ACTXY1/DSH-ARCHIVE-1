@@ -24,7 +24,7 @@ function Test-Port([int]$p) {
   } catch { return $false }
 }
 
-# 2026-09-10：新版 dsh web（≥0.1.2）引入浏览器鉴权——dsh 启动时把带进程令牌的地址打印为
+#：新版 dsh web（≥0.1.2）引入浏览器鉴权——dsh 启动时把带进程令牌的地址打印为
 # "dsh web: http://127.0.0.1:PORT/?token=..."（archive.log）；裸开 http://127.0.0.1:PORT 会返回
 # "dsh web authentication required"。这里解析日志中的该地址并持久化到 dsh\data\web.url
 # （托盘/二次打开复用；首次访问签发 Cookie 后普通地址亦可访问）；旧版 dsh 无此行则回落纯地址。
@@ -60,7 +60,7 @@ function Open-Console {
   }
 }
 
-# System tray resident (2026-08-30 v2): tray.ps1 itself is idempotent (mutex).
+# System tray resident ( v2): tray.ps1 itself is idempotent (mutex).
 function Start-Tray {
   $trayScript = Join-Path $root 'tray.ps1'
   if (Test-Path $trayScript) {
@@ -73,7 +73,7 @@ Write-Host '=============================='
 Write-Host '  DSH-ARCHIVE one-click start'
 Write-Host '=============================='
 
-# 1) 环境检查（2026-09-10 独立化）：使用项目自带的 dsh 引擎，不再依赖全局 dsh 命令
+# 1) 环境检查（ 独立化）：使用项目自带的 dsh 引擎，不再依赖全局 dsh 命令
 $projHome  = Join-Path $root '.dsh-home'
 $engineBin = Join-Path $dshDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
 if (-not (Test-Path $engineBin)) {
@@ -82,7 +82,7 @@ if (-not (Test-Path $engineBin)) {
   exit 1
 }
 
-# 1.5) 项目内 profile 入口（2026-09-10 独立化）：入口一律位于项目 home 内
+# 1.5) 项目内 profile 入口（ 独立化）：入口一律位于项目 home 内
 #      （<项目>\.dsh-home\profiles\archive -> <项目>\dsh），不再使用 ~/.dsh——也就不存在
 #      "多副本共用全局入口被互相覆盖"的问题；缺失/指向错误时本脚本直接创建或修正。
 #      另做数据路径自检：cordis.patch.yml 的数据路径必须全部落在本副本 dsh\data，
@@ -129,7 +129,7 @@ if (Test-Path -LiteralPath $legacyHome) {
 if (Test-Path $junction) {
   $jit = Get-Item $junction -Force -ErrorAction SilentlyContinue
   if (($null -eq $jit) -or ($jit.LinkType -ne 'Junction')) {
-    # 2026-09-10：文件夹被"复制"后，链接可能变成真实目录（复制工具解引用）——home 属运行时可再生
+    #：文件夹被"复制"后，链接可能变成真实目录（复制工具解引用）——home 属运行时可再生
     # 产物（不含用户数据），这里直接移除并重建为链接，实现复制善后自愈。
     Write-Host "[start] profile 入口是真实目录（疑似复制所致），自动重建为链接..." -ForegroundColor Yellow
     & cmd /c rmdir /s /q "`"$junction`"" 2>$null | Out-Null
@@ -209,7 +209,7 @@ if ($strayValues.Count -gt 0) {
   Write-Host '[start] 环境自检通过（项目内引擎 + 项目内 profile 入口 + 数据路径一致）。' -ForegroundColor Green
 }
 
-# 1.6) 项目 home 的 agent preset（2026-09-10 独立化）：preset 的加载位置由 DSH_HOME 决定，
+# 1.6) 项目 home 的 agent preset（ 独立化）：preset 的加载位置由 DSH_HOME 决定，
 #      必须在引擎启动前就位，否则主会话会因 "preset archive-standard not found" 而 resume 失败
 #      （既有安装从 ~/.dsh 迁移过来时尤其重要）。幂等：仅缺失时复制，不覆盖已有内容。
 $presetSrc = Join-Path $root 'presets\archive-standard'
@@ -226,11 +226,11 @@ if (-not $NoSync) {
   & (Join-Path $dshDir 'scripts\sync-plugins.ps1')
 }
 
-# 2.5) project-bundled ollama (2026-08-30: download-the-project = ready-to-use embedding).
+# 2.5) project-bundled ollama (: download-the-project = ready-to-use embedding).
 #      OLLAMA_MODELS points inside the project folder, so the bundled instance never touches
 #      a global ollama model store; if port 11434 is already served by an external ollama,
 #      reuse it (no PID file is written, so stop.ps1 will not kill it).
-#      2026-09-04 fix: verify the 11434 listener is really an ollama process before reusing
+#       fix: verify the 11434 listener is really an ollama process before reusing
 #      it - an unrelated service on that port must not suppress the bundled ollama start.
 $ollamaExe = Join-Path $root 'ollama\bin\ollama.exe'
 $ollamaPidFile = Join-Path $root 'ollama\ollama.pid'
@@ -278,20 +278,20 @@ if (Test-Path $ollamaExe) {
   Write-Host '[start] bundled ollama not found (skip; embedding needs an ollama on 11434)' -ForegroundColor Yellow
 }
 
-# 3) Single-instance guard (2026-08-31 fix: dual-instance incident - a stale instance on
+# 3) Single-instance guard ( fix: dual-instance incident - a stale instance on
 #    3111/3113 was invisible to the old check that only probed 3081, so a second instance
 #    started and both shared the same data dir, splitting conversations/memory).
 #    Checks (a) PID file (dsh\data\dsh.pid, written after successful start with the
 #                3081 listener PID)
 #           (b) any of target port 3081 and legacy ports 3111/3113 being listened.
-#    2026-09-04 fix: RetainDB Local (dsh-mnemon memory provider, auto-started by
+#     fix: RetainDB Local (dsh-mnemon memory provider, auto-started by
 #    %USERPROFILE%\.dsh\scripts\restore-dsh-services.ps1) permanently listens on
 #    3111/3113, which made this guard falsely report "already running" and refuse to
 #    start on 3081. Detect it via its health endpoint and exempt both legacy ports.
 function Test-PidAlive([int]$id) {
   try { return $null -ne (Get-Process -Id $id -ErrorAction Stop) } catch { return $false }
 }
-# 2026-09-04 fix: the PID file records the 3081 listener PID at start time; after dsh exits
+#  fix: the PID file records the 3081 listener PID at start time; after dsh exits
 # that PID may be recycled by the OS to an unrelated process (e.g. RetainDB is also a node
 # process), which would falsely block startup. Only trust the PID file when the process is
 # still a node process AND still owns the 3081 listener.
@@ -325,7 +325,7 @@ foreach ($p in @($port) + $legacyPorts) {
     foreach ($line in $found) {
       if ($line -match 'LISTENING\s+(\d+)\s*$') {
         $pid1 = [int]$Matches[1]
-        # 2026-09-04 fix: only treat the listener as a running dsh instance when it is
+        #  fix: only treat the listener as a running dsh instance when it is
         # really a node process; an unrelated service on the port must not block startup.
         $proc1 = Get-Process -Id $pid1 -ErrorAction SilentlyContinue
         if ($proc1 -and $proc1.ProcessName -eq 'node') {
@@ -351,7 +351,7 @@ if ($runningPids.Count -gt 0) {
   exit 0
 }
 
-# 3.5) log rotation (2026-08-30): keep archive.log under 10 MB - rename to .old on start
+# 3.5) log rotation: keep archive.log under 10 MB - rename to .old on start
 if (Test-Path $log) {
   $len = (Get-Item $log).Length
   if ($len -gt 10MB) {
@@ -364,9 +364,9 @@ if (Test-Path $log) {
 # Note: dsh always runs with --no-open (otherwise dsh opens a browser itself, plus this
 #       script's SUCCESS branch opens another = two pages); the browser is opened exactly
 #       once by this script unless -NoOpen.
-# Log encoding (2026-08-30 fix): redirect via cmd /c - cmd writes bytes as-is, so dsh
+# Log encoding ( fix): redirect via cmd /c - cmd writes bytes as-is, so dsh
 #       UTF-8 output lands verbatim; PS 5.1 *>> would transcode to ANSI/GBK and garble it.
-# 2026-09-10 独立化：启动【项目自带引擎】（node <项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js），
+#  独立化：启动【项目自带引擎】（node <项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js），
 #       并通过 cmd set 只在本次子进程内注入 DSH_HOME=<项目>\.dsh-home —— 全局 dsh 与 ~/.dsh
 #       的任意改动都不参与本项目运行（原 DSH 升级/卸载/家目录清理均无影响）。
 Write-Host "[start] starting control UI at http://127.0.0.1:$port (log: $log)"
@@ -380,14 +380,14 @@ for ($i = 0; $i -lt 30; $i++) {
   if (Test-Port $port) { $ready = $true; break }
 }
 if ($ready) {
-  # 2026-08-31 single-instance guard: record the 3081 listener PID for the next start.
+  #  single-instance guard: record the 3081 listener PID for the next start.
   try {
     $listener = @(netstat -ano | Select-String (":$port\s") | ForEach-Object {
       if ($_ -match 'LISTENING\s+(\d+)\s*$') { [int]$Matches[1] }
     } | Select-Object -Unique | Select-Object -First 1)
     if ($listener.Count -gt 0 -and $listener[0]) { $listener[0] | Out-File $dshPidFile -Encoding ascii }
   } catch { }
-  # System tray resident (2026-08-30 v2: tray.ps1 idempotent, keeps a single instance).
+  # System tray resident ( v2: tray.ps1 idempotent, keeps a single instance).
   Start-Tray
   Write-Host "[start] SUCCESS: http://127.0.0.1:$port" -ForegroundColor Green
   Open-Console

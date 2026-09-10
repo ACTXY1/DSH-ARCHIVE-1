@@ -1,5 +1,4 @@
 # The `standard` agent preset: the full coding agent, mounted once per process.
-#
 # This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
 # standing scope; every session naming it joins by scope parentage, so the
 # tools and prompt sections registered here cover each joined agent while a
@@ -7,7 +6,6 @@
 # host composition (`base.cordis.yml` + `web.cordis.yml`) keeps everything a
 # preset must not own: the registries themselves, the sandbox and approval
 # stack, persistence, and the model route.
-#
 # A service row here MUST sit inside a group carrying an `isolate` realm.
 # Without one it publishes into the root realm, where it is process-global —
 # another preset publishing the same name collides, and a host reader would
@@ -127,7 +125,6 @@
 
 # `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
 # share this realm rather than sit outside it.
-#
 # `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
 # plane, and the rows here resolve that one instance. It takes no configuration,
 # keys every fold by Session, and owns the context-meter projection units the
@@ -161,11 +158,9 @@
 # the api-proxy serves to the browser, and a provider name may only be
 # registered once. This preset contributes the delegation TOOLS, which resolve
 # that host registry.
-#
 # `workflows` is different — nothing outside an agent reads it — so every row
 # that reaches it shares one entry-local realm here, and a consumer left
 # outside would resolve a host registry this preset does not populate.
-#
 # `tool-subagent-report` is host-plane for the same reason as the registry,
 # not because a preset may not want it: it registers a CONTINUABLE SETUP on
 # that singleton rather than a tool this agent calls, and the setup list is
@@ -244,7 +239,7 @@
     allowParallelInProgress: true
 
 # The `web` service and its search/fetch providers stay in the host composition; only
-# the model-facing tool is per-session. archive-standard = standard 副本（2026-08-30）：
+# the model-facing tool is per-session. archive-standard = standard 副本：
 # 开启 fetch，配合宿主组合的 dsh-archive-web-fetch provider（沙箱内 schannel TLS 不可用，
 # 网页正文抓取改走宿主侧 fetch）。
 - id: tool-web

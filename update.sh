@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
 #  update.sh —— DSH-ARCHIVE 手机版 一键更新 / 一键回滚
-#
 #  适用环境：安卓 Termux + proot-distro Ubuntu（glibc）
 #  用法：进入项目根目录后执行
 #    bash update.sh                    # 更新到最新
 #    bash update.sh -Rollback          # 回退到上一个发布版
-#    bash update.sh -Rollback -TargetTag v2026-09-01
+#    bash update.sh -Rollback -TargetTag v
 #  开发/测试开关：-NoFetch（跳过 git fetch） -NoStop（不停服） -NoStart（更新后不启动）
-#
 #  流程：校验 → git 检查 → fetch（失败不打扰服务）→ 版本比较（已最新则退出，
 #        本地领先远程则中止防降级）→ 备份本地改动 → 停服 → 强制检出
 #        → 路径归一化（git 检出会带回 C:/ 路径，必须重写为当前安装目录）
@@ -203,7 +201,7 @@ else
   log "已重写 $changed 个文件中的旧路径 -> $INSTALL_DIR"
 fi
 
-# ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段；2026-09-10 独立化） ----------------
+# ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段； 独立化） ----------------
 PROJ_HOME="$INSTALL_DIR/.dsh-home"
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 export DSH_HOME="$PROJ_HOME"

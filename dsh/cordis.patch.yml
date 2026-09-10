@@ -1,8 +1,7 @@
 # DSH-ARCHIVE 项目补丁层（bundle 层之后应用）。
-# 阶段一：无插件基础状态。阶段二起逐行加入自定义插件。
-#
+# 无插件基础状态。逐行加入自定义插件。
 
-# [阶段六] 提示词/报错全量记录（dsh-archive-ledger，源码：C:/DSH-ARCHIVE\modules\ledger）
+#  提示词/报错全量记录（dsh-archive-ledger，源码：C:/DSH-ARCHIVE\modules\ledger）
 #  - 必须最先插入：logger 工厂/console/fetch/ctx.llm/进程级五路钩子须在其它模块 apply 前生效
 #  - ctx.archiveLedger 服务 + /archive-ledger RPC（总控底部「提示词/报错」面板数据源）
 - insert:
@@ -11,7 +10,7 @@
       config:
         dataPath: C:/DSH-ARCHIVE/dsh/data/ledger
 
-# [阶段二] 跨会话全局记忆系统（dsh-archive-memory，源码：C:/DSH-ARCHIVE\modules\memory）
+#  跨会话全局记忆系统（dsh-archive-memory，源码：C:/DSH-ARCHIVE\modules\memory）
 #  - ctx.memory 服务 + memory_write/recall/forget/stats 工具
 #  - 用户画像 user_profile_set/get/remove + 用户状态 user_state_set/get/clear 工具
 #  - 向量：ollama shaw/dmeta-embedding-zh（768 维）；存储：SQLite（C:/DSH-ARCHIVE/dsh/data/memory.db）
@@ -26,9 +25,9 @@
         timeoutMs: 60000
         defaultStateTtlSeconds: 14400
 
-# [阶段三] 人格系统入口（dsh-archive-persona，源码：C:/DSH-ARCHIVE\modules\persona）
+#  人格系统入口（dsh-archive-persona，源码：C:/DSH-ARCHIVE\modules\persona）
 #  - ctx.persona 服务 + persona_view/set/update 工具
-#  - persona.json 权威存储 + persona-history.jsonl 追加式留档（含快照，供阶段四回滚）
+#  - persona.json 权威存储 + persona-history.jsonl 追加式留档（含快照，供回滚）
 #  - systemPrompt 动态 context(persona-identity, order 500) 每回合注入人格
 - insert:
     - id: archive-persona
@@ -38,7 +37,7 @@
         injectOrder: 500
         injectEnabled: true
 
-# [阶段四·4a] 虚拟时钟（dsh-archive-clock，源码：C:/DSH-ARCHIVE\modules\clock）
+#  虚拟时钟（dsh-archive-clock，源码：C:/DSH-ARCHIVE\modules\clock）
 #  - ctx.virtualClock 服务 + 启动同步/周期校准 + <time> 注入(order 200)
 - insert:
     - id: archive-clock
@@ -48,13 +47,13 @@
         injectOrder: 200
         injectEnabled: true
 
-# [阶段四·4a] 自循环思考驱动器（dsh-archive-loop，源码：C:/DSH-ARCHIVE\modules\loop）
+#  自循环思考驱动器（dsh-archive-loop，源码：C:/DSH-ARCHIVE\modules\loop）
 #  - 事件触发 + 定时兜底（默认 5 分钟，loop_config 可运行时调整）
 #  - 每循环：召回记忆→结合用户状态/人格/时间分析场景→决定行为（主动能力唯一决策点）
 #  - 后果评估 + 行动预算/发言限频/空转抑制/超时；循环日志写回记忆(source=loop)
-#  - 2026-09-01：用户主动发消息后暂停时间驱动循环 quietAfterUserMs（默认 180s），窗口内只跑对话循环；
+#  -：用户主动发消息后暂停时间驱动循环 quietAfterUserMs（默认 180s），窗口内只跑对话循环；
 #    运行中的时间驱动循环被立即中止并清理记录/回退行为（防并行决策用同一时刻记忆 → 割裂对话）
-#  - 2026-09-03 记忆错乱修复：quietAfterUserMs 30s→180s 且对话回合结束也刷新静默窗口（防 proactive
+#  -  记忆错乱修复：quietAfterUserMs 30s→180s 且对话回合结束也刷新静默窗口（防 proactive
 #    紧贴对话/旧问答串线重复推送，实机 00:00:30 事故）；睡眠期语义修正：状态 TTL 到期≠醒来，
 #    睡眠期持续至真实唤醒信号（用户消息/状态清除或改标签/任务打断），杜绝睡眠中连环主动打扰
 - insert:
@@ -66,7 +65,7 @@
         tickMs: 30000
         initialDelayMs: 30000
         thinkTimeoutMs: 120000
-        # 2026-09-03-9：思维循环 LLM 总上限 60s→120s（双 Agent 两段调用 + 用户指示放宽默认时限）
+        #：思维循环 LLM 总上限 60s→120s（双 Agent 两段调用 + 用户指示放宽默认时限）
         provider: deepseek-official
         model: deepseek-v4-flash
         maxActionsPerCycle: 1
@@ -76,14 +75,14 @@
         recallRelated: 5
         injectOrder: 900
         quietAfterUserMs: 60000
-        # 2026-09-03-6：对话让路窗 60s（用户指示 30s~60s 区间取上限；防串线靠上下文注入，窗口仅兜底）
-        # 2026-09-01-4：单次决策 token 预算（deepseek-v4-flash 推理模型 reasoning 会大量占用，
+        #：对话让路窗 60s（用户指示 30s~60s 区间取上限；防串线靠上下文注入，窗口仅兜底）
+        #：单次决策 token 预算（deepseek-v4-flash 推理模型 reasoning 会大量占用，
         # 700/2000 下复杂简报易致正文截断 → "LLM 未返回文本" → 循环失败风暴；10000 预留充足空间）。
         # 总控「思维循环」页运行配置可运行时调整（无需重启）。
         maxTokens: 10000
-        # 睡眠/清醒期（2026-08-31）：用户"睡眠中"持续 ≥sleepEnterDelayMs 且未来
+        # 睡眠/清醒期：用户"睡眠中"持续 ≥sleepEnterDelayMs 且未来
         # sleepCheckWindowMs 内无 pending 任务 → 进入睡眠期（循环完全暂停）。
-        # 2026-09-03 语义修正：仅真实唤醒信号解除——定时任务/用户消息/状态被清除或改标
+        #  语义修正：仅真实唤醒信号解除——定时任务/用户消息/状态被清除或改标
         # 为其他状态；sleepMaxMs 仅作"无 TTL 睡眠行（直到手动清除）"的绝对兜底上限
         # （正常带 TTL 的睡眠到期≠醒来，保持静默，防夜行长睡眠被连环打扰）。
         sleepEnterDelayMs: 1800000
@@ -91,11 +90,11 @@
         sleepCooldownMs: 10800000
         sleepCheckWindowMs: 28800000
 
-# [阶段四·4b] 自进化系统（dsh-archive-evolution，源码：C:/DSH-ARCHIVE\modules\evolution）
+#  自进化系统（dsh-archive-evolution，源码：C:/DSH-ARCHIVE\modules\evolution）
 #  - 候选生成→隔离评估→安全门→用户授权采纳/拒绝/回滚（不自动生效）
 #  - 进化对象：虚拟人格（ctx.persona by='evolution'）+ 技能（data/skills 技能库）
 #  - 每次进化留档：data/evolution.jsonl 追加式账本
-#  - 自动建议（2026-08-31）：每日 autoHour 自动生成候选（by='auto'，仅候选+评估+留档，不自动采纳），
+#  - 自动建议：每日 autoHour 自动生成候选（by='auto'，仅候选+评估+留档，不自动采纳），
 #    生成 ≥1 条新候选时经 notify 主动告知；人格←对话总结（persona 六维度），skill←对话/工作提炼
 - insert:
     - id: archive-evolution
@@ -110,7 +109,7 @@
         autoHour: 22
         autoNotify: true
 
-# [阶段五] 主动消息通道（dsh-archive-notify）：控制台 + notifications.jsonl 流水
+#  主动消息通道（dsh-archive-notify）：控制台 + notifications.jsonl 流水
 - insert:
     - id: archive-notify
       name: dsh-archive-notify
@@ -120,7 +119,7 @@
         minIntervalMs: 30000
         cleanupRetentionDays: 7
 
-# [阶段五] 定时任务（dsh-archive-schedule）：告诉 AI 几点干什么 → 到点发消息/干活
+#  定时任务（dsh-archive-schedule）：告诉 AI 几点干什么 → 到点发消息/干活
 - insert:
     - id: archive-schedule
       name: dsh-archive-schedule
@@ -129,8 +128,8 @@
         checkMs: 30000
         cleanupRetentionDays: 7
 
-# [阶段五] 总控界面（dsh-archive-control）：Host RPC + Client 设置页"智能体总控"面板
-# dataRoot（2026-08-30-17）：数据根显式配置（与 memory/schedule/notify 一致）；
+#  总控界面（dsh-archive-control）：Host RPC + Client 设置页"智能体总控"面板
+# dataRoot：数据根显式配置（与 memory/schedule/notify 一致）；
 # 备份根 = 项目根 backups（dataRoot 上级），分发时随文档改此处绝对路径。
 - insert:
     - id: archive-control
@@ -138,7 +137,7 @@
       config:
         dataRoot: C:/DSH-ARCHIVE/dsh/data
 
-# [迭代 2026-08-29] 图像识别：参照 dsh-web-all 组件 @linxin666/dsh-tool-describe-image
+#  图像识别：参照 dsh-web-all 组件 @linxin666/dsh-tool-describe-image
 #  - Host: describe_image 工具（agent 可识别本地路径/http(s) URL/附件引用图片）
 #  - Client: webui 输入框图片按钮 + 会话内图片引用渲染 + 设置页"Image understanding"配置
 #  - 密钥经全局凭据服务解析 DEEPSEEK_API_KEY（~/.dsh/.credentials.yaml）
@@ -150,7 +149,7 @@
         model: deepseek-v4-flash-vision-exp
         apiKeyEnv: DEEPSEEK_API_KEY
 
-# [迭代 2026-08-31] 潜意识系统·梦境引擎（dsh-archive-subconscious）：异步后台进程，只在睡眠期触发。
+#  潜意识系统·梦境引擎（dsh-archive-subconscious）：异步后台进程，只在睡眠期触发。
 # ①记忆脱粒机：过去 24h 高频记忆(accessCount≥3) → 聚类 → 本地 Phi-3:mini（随包内置，可选用
 # DeepSeek）凝缩为原型陈述入潜记忆池；②异质碰撞器：池内随机 2 条不相关(余弦<0.3)原型 →
 # DeepSeek 哲学隐喻关联生成进化草案（附自洽置信度 0-100）；③调度：自洽≥80 且新颖度≥60 →
@@ -167,7 +166,7 @@
         llmModel: deepseek
         autoApply: false
 
-# [迭代 2026-08-31] 人格一致性校验器（dsh-archive-consistency）：滑动窗口人格轨迹（最近 100 轮
+#  人格一致性校验器（dsh-archive-consistency）：滑动窗口人格轨迹（最近 100 轮
 # 交互 + 最近 5 条已审批进化建议的 768 维向量）+ PCA 3 维坐标 + 突变梯度拦截（G<α 放行 /
 # α≤G≤β 局部重写 / G>β 强制刹车重生成）+ 进化审批协同（航点入轨 + β 动态抬高 + 倒叙修正）。
 # 总控界面「人格一致性」开关 + 「一致性」功能页；embedding 复用 memory 同源 ollama。
@@ -183,7 +182,7 @@
         scopedSessions:
           - session-main
 
-# [迭代 2026-08-30] web_fetch 抓取 provider：宿主侧 node fetch（绕开沙箱受限令牌的
+#  web_fetch 抓取 provider：宿主侧 node fetch（绕开沙箱受限令牌的
 # schannel TLS 限制）。背景：windows-acl 受限令牌下 AcquireCredentialsHandle 失败
 # （SEC_E_NO_CREDENTIALS），沙箱内 pwsh/curl 的 HTTPS 全挂，宿主进程 fetch 正常。
 # 本行注册 ctx.web 的 fetch provider；web_fetch 工具在 standard 副本 preset
@@ -192,13 +191,13 @@
     - id: archive-web-fetch
       name: dsh-archive-web-fetch
 
-# [迭代 2026-09-02] Web 性能优化（dsh-archive-web-perf）：/assets gzip+immutable 缓存、
+#  Web 性能优化（dsh-archive-web-perf）：/assets gzip+immutable 缓存、
 # Service Worker 缓存 /plugins 客户端模块（刷新秒开）。纯 Host 插件，三端同步生效。
 - insert:
     - id: archive-web-perf
       name: dsh-archive-web-perf
 
-# [独立项目隔离 2026-08-29] 本项目为独立 DSH 实例：会话/工作区/设置/凭据/附件
+# [独立项目隔离 ] 本项目为独立 DSH 实例：会话/工作区/设置/凭据/附件
 # 全部落于项目内（dsh/data 下），不再共享全局 ~/.dsh（否则会看到其他 DSH 环境的记录）。
 - id: session-persistence-jsonl
   config:

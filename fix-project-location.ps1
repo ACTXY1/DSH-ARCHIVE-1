@@ -1,6 +1,5 @@
 ﻿# ============================================================
 #  fix-project-location.ps1  （双击入口：首次安装或移动项目位置点我.cmd）
-#
 #  用途：项目被移动/复制到新位置后（或首次安装），一键检测当前用户环境、
 #        配置项目全部前置与依赖、修复所有依赖旧位置/旧机器的问题：
 #          0. 校验项目根
@@ -12,11 +11,9 @@
 #          6. 数据目录存在性
 #          7. profile 可加载性验证（项目引擎 + DSH_HOME=项目 home：--profile archive --dump-config）
 #          8. ollama 向量模型运行时（无本机 ollama 时自动下载，首次启动自动拉取嵌入模型）
-#
 #  用法：双击同目录《首次安装或移动项目位置点我.cmd》；
 #        或 powershell -NoProfile -ExecutionPolicy Bypass -File "fix-project-location.ps1"
 #        加 -DryRun 只检查报告、不修改任何内容。
-#
 #  设计：脚本位置即项目根（$PSScriptRoot），不硬编码任何绝对路径，
 #        因此主文件夹/分发包/新机器均可直接使用。
 # ============================================================
@@ -216,7 +213,7 @@ if ($DryRun) {
         Write-Ok 'pnpm 已就绪'
     }
 
-    # 2c) 项目自带 dsh 引擎（@deepseek-ai/dsh，随 package.json 锁定；2026-09-10 起不再需要全局 dsh CLI）
+    # 2c) 项目自带 dsh 引擎（@deepseek-ai/dsh，随 package.json 锁定； 起不再需要全局 dsh CLI）
     $engineBin = Join-Path $root 'dsh\node_modules\@deepseek-ai\dsh\lib\bin.js'
     if (-not (Test-Path $engineBin)) {
         if (-not $netOk) {
@@ -280,7 +277,7 @@ if (Test-Path -LiteralPath $legacyHome) {
     }
 }
 
-# 2026-09-10 独立化：入口位于【项目 home 内】，与其它副本、与全局 ~/.dsh 互不影响，
+#  独立化：入口位于【项目 home 内】，与其它副本、与全局 ~/.dsh 互不影响，
 #   逻辑简单且幂等：缺失 → 创建；被复制成真实目录 → 自动重建（home 属可再生运行时产物）；
 #   指向不对 → 直接修正回本副本（只影响本副本，不存在"抢别人入口"的问题）。
 try {
@@ -315,7 +312,7 @@ try {
 
 # ---------------- 5. 项目内绝对路径引用重写 ----------------
 Write-Step '5/9 扫描并重写项目内旧绝对路径引用'
-# 2026-09-05 收敛范围：只处理影响运行的配置文件/脚本/代码（cordis.patch.yml、presets、.ps1/.js/
+#  收敛范围：只处理影响运行的配置文件/脚本/代码（cordis.patch.yml、presets、.ps1/.js/
 # package.json/.cmd 等），【跳过 .md/.txt 等文档】——避免把 README/说明里的 https clone 链接或
 # 示例路径误改（曾出现 README 的 httpC:/DSH-ARCHIVE-1.git 被改坏成 httpD:/cs/…）。
 $textExts = '.yml','.yaml','.ps1','.json','.js','.cjs','.mjs','.cmd','.bat'
@@ -329,7 +326,7 @@ $rootNorm = Normalize-Path $root
 # 匹配「盘符: 分隔符 任意路径段 DSH-ARCHIVE」（贪婪到行内最后一个 DSH-ARCHIVE），
 # 用于定位项目曾经所在位置的绝对路径；路径段排除 引号/冒号/换行/尖括号/竖线/反引号
 # （排除冒号可让一行里并列的多个盘符路径各自独立匹配，避免贪婪吞并）。
-# 2026-09-10 重写算法加固（原"贪婪到最后一个 DSH-ARCHIVE"在项目路径本身含该词且后面还有段时
+#  重写算法加固（原"贪婪到最后一个 DSH-ARCHIVE"在项目路径本身含该词且后面还有段时
 # 会把路径层层拼接成垃圾，例如 …\DSH-ARCHIVE总文件夹\_e2e\B、用户常见的 DSH-ARCHIVE-Copy）。
 # 现改为"完整盘符路径 token + 三条精确规则"，严格幂等、输出统一正斜杠：
 #   ① 已在当前根下            → 原样保留

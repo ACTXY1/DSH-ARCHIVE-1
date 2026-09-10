@@ -2,9 +2,9 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-// 2026-08-31 修复：apply 会立即触发 autoBackupCheck（写真实备份目录）。切换到临时 cwd，
+//  修复：apply 会立即触发 autoBackupCheck（写真实备份目录）。切换到临时 cwd，
 // 使 DATA_ROOT/BACKUP_ROOT 落在 tmp 下（自动备份/导入测试的备份目录也由本脚本自建，无项目污染）。
-// 2026-09-01：PROJECT_ROOT 改为 dataRoot 上级的上级（修复备份根错位回归）——为保持 PROJECT_ROOT=tmp
+//：PROJECT_ROOT 改为 dataRoot 上级的上级（修复备份根错位回归）——为保持 PROJECT_ROOT=tmp
 // 的语义，dataRoot 必须传 tmp/dsh/data（模拟真实层级 dsh/data），不能再用 cwd/data 兜底。
 const tmp = mkdtempSync(join(tmpdir(), 'verify-rpc-'));
 mkdirSync(join(tmp, 'dsh', 'data'), { recursive: true });
@@ -19,7 +19,7 @@ const origWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk) => { stdout += String(chunk); return true; };
 
 const fake = (v) => ({ get: () => v, list: () => v, stats: () => v, snapshot: () => ({ rendered: 'x' }) });
-// 2026-09-07：内存态 settings（models.setProviders 密钥保留合并逻辑的回归守卫依赖它）
+//：内存态 settings（models.setProviders 密钥保留合并逻辑的回归守卫依赖它）
 const memSettings = { providers: [] };
 const ctx = {
   root: { logger: () => ({ info: () => {}, warn: () => {} }) },
@@ -43,7 +43,7 @@ const ctx = {
     };
     if (name === 'skills') return { list: async () => [{ name: 'skill-a', description: 'desc', whenToUse: 'w', source: 'test', provider: 'provider-p' }] };
     if (name === 'settings') return {
-      // 2026-09-07：改为内存态（原恒空对象无法验证 models.setProviders 的密钥保留合并逻辑）
+      //：改为内存态（原恒空对象无法验证 models.setProviders 的密钥保留合并逻辑）
       register: () => ({}),
       get: (ns) => (String(ns) === 'archive-models' ? { providers: memSettings.providers } : memSettings),
       update: async (ns, patch) => {
@@ -53,12 +53,12 @@ const ctx = {
     };
     if (name === 'credentials') return { peek: () => undefined, set: async () => {}, resolve: async () => undefined };
     if (name === 'directoryPicker') return { capability: () => ({ kind: 'native', pick: async (signal) => {
-      // 2026-08-30 回归守卫：native pick 契约要求 AbortSignal（pick 内部会读 signal.aborted），
+      //  回归守卫：native pick 契约要求 AbortSignal（pick 内部会读 signal.aborted），
       // 未传 signal 是真实运行时报错的根因，这里必须捕获。
       if (!signal || signal.aborted !== false) throw new Error('pick 未收到有效 AbortSignal');
       return 'C:\\picked-dir';
     } }) };
-    // 2026-09-04 permission.state/set stub：模拟 dsh-permission-presets 服务表面
+    //  permission.state/set stub：模拟 dsh-permission-presets 服务表面
     if (name === 'permissionPresets') return {
       names: ['read-only', 'workspace-write', 'danger-full-access'],
       current: () => 'workspace-write',
@@ -86,7 +86,7 @@ const ctx = {
   },
   persona: { get: () => ({ version: 1 }), stats: () => ({ version: 1, total: 4 }), history: (l) => [], set: (e, o) => ({ version: 2, added: e.length }), update: () => ({ modifiedBy: 'user' }), remove: () => ({ removed: true }), rollback: (v) => true },
   loop: { state: () => ({ mode: 'idle' }), stats: () => ({ cycleCount: 1 }), configure: (a) => ({ fallbackIntervalMs: a.fallbackIntervalMs }), trigger: () => ({ queued: true }),
-    // 2026-09-04-2 思维预设 stub（get/save/preview）
+    //  思维预设 stub（get/save/preview）
     instructions: {
       get: () => ({ presets: [], activePresetId: '', entries: [], injectCapChars: 1200 }),
       save: (s) => ({ presets: [], activePresetId: '', entries: [], injectCapChars: 1200 }),
@@ -94,13 +94,13 @@ const ctx = {
     } },
   memory: { forgetStats: () => ({ total: 9 }), list: (o) => [], recall: async (q) => ({ results: [] }), get: () => null, update: () => ({ updated: true }), forget: () => ({ removed: true }), forgetRun: () => ({ softened: 1 }), restore: () => ({ restored: true }), forgottenList: () => [], integrate: async () => ({ skipped: true, reason: 'stub' }), importBackup: (p) => ({ ok: true, memories: 1, skipped: 0, profiles: 0, states: 0 }), profile: { list: () => [] }, state: { snapshot: () => ({ rendered: 'x' }) }, stats: () => ({ total: 9 }) },
   evolution: { view: (l) => ({ records: [] }), stats: () => ({ totalCandidates: 0 }), suggest: async () => ({ candidateIds: [] }), approve: async () => ({ applied: true }), reject: () => ({ rejected: true }), rollback: async () => ({ rolledBack: true }),
-    // 2026-09-08 人格一键凝练 stub（persona.distillPreview/Apply 走 ctx.evolution）
+    //  人格一键凝练 stub（persona.distillPreview/Apply 走 ctx.evolution）
     distillPersona: async () => ({ token: 'stub-token', direction: '', at: Date.now(), before: { version: 1, total: 2, bySection: { identity: 0, values: 0, traits: 1, style: 0, directives: 1, capabilities: 0 } }, after: { total: 2, bySection: { identity: 0, values: 0, traits: 1, style: 0, directives: 1, capabilities: 0 } }, entries: [{ section: 'traits', content: '凝练后的条目', importance: 0.7, mergedFrom: ['a'] }] }),
     applyPersonaDistill: async (t) => { if (t !== 'stub-token') throw new Error('凝练结果已失效或不存在'); return { applied: true, version: 5, added: 1 }; } },
   schedule: { list: () => [], create: (a) => ({ id: 't', task: a.task }), cancel: (id) => ({ cancelled: true }), stats: () => ({ byStatus: {} }) },
   notify: { view: (l) => ({ notifications: [] }), markRead: () => ({ marked: 0 }), clearRead: () => ({ removed: 0 }), stats: () => ({ total: 0 }) },
   virtualClock: { format: () => '2026-08-29 01:30:00' },
-  // 2026-08-31 人格一致性 stub（consistency ops / evolution.approve 联动）
+  //  人格一致性 stub（consistency ops / evolution.approve 联动）
   consistency: {
     state: () => ({ enabled: true, alpha: 6, beta: 12, calibrated: true, turnCount: 5, waypointCount: 1, stats: { checks: 5, pass: 4, suspicious: 0, blocked: 1 } }),
     stats: () => ({ checks: 5 }),
@@ -111,7 +111,7 @@ const ctx = {
     onEvolutionApproved: async () => ({ ok: true }),
     close: () => {},
   },
-  // 2026-08-31 潜意识系统 stub（subconscious ops / 自进化页）
+  //  潜意识系统 stub（subconscious ops / 自进化页）
   subconscious: {
     state: () => ({ enabled: true, autoApply: false, condenseModel: 'phi', llmModel: 'deepseek', poolCount: 0, draftCount: 0, whisper: null, stats: {}, thresholds: {} }),
     stats: () => ({}),
@@ -162,7 +162,7 @@ check('notify.view', (await call('notify.view')).ok === true);
 check('tools.list', (await call('tools.list')).value.tools.length === 2);
 check('skills.list', (await call('skills.list')).value.skills[0].name === 'skill-a');
 check('models.get', (await call('models.get')).value.providers.length === 0);
-// 2026-09-07 回归守卫（高危修复）：setProviders 必须先存密钥，再以"空 apiKey 整表回写"（模拟
+//  回归守卫（高危修复）：setProviders 必须先存密钥，再以"空 apiKey 整表回写"（模拟
 // 启停/删除/编辑留空），断言密钥不被清空——此前把空 apiKey 直接落盘会静默清空全部自定义提供商密钥。
 await call('models.setProviders', { providers: [{ id: 'p1', name: 'x', baseURL: 'http://x/v1', model: 'm', apiKey: 'sk-keep', enabled: true }] });
 const kept = await call('models.get');
@@ -197,13 +197,13 @@ check('evolution.approve 联动一致性', (await call('evolution.approve', { ca
 check('subconscious.state', (await call('subconscious.state')).value.condenseModel === 'phi');
 check('subconscious.model Phi 状态', (await call('subconscious.model')).value.name === 'phi3:mini');
 check('subconscious.configure 开关', (await call('subconscious.configure', { enabled: false })).value.enabled === false);
-// 一键更新（方案 D，2026-09-02）：stub 环境 PROJECT_ROOT=tmp 非 git 仓库 → check 离线兜底；apply 缺脚本报错
+// 一键更新（方案 D）：stub 环境 PROJECT_ROOT=tmp 非 git 仓库 → check 离线兜底；apply 缺脚本报错
 const updCheck = await call('updater.check');
 check('updater.check 离线兜底（非 git 仓库/网络不可达时给出明确状态）', updCheck.ok === true && updCheck.value?.offline === true && typeof updCheck.value?.currentVersion === 'string');
 check('updater.apply 缺脚本返回协议错误', (await call('updater.apply')).error !== undefined);
 const unknownOpError = (await call('nope')).error;
 check('未知 op 返回协议错误对象（{code,message,details}）', !!unknownOpError && typeof unknownOpError === 'object' && unknownOpError.code === 'internal' && typeof unknownOpError.message === 'string' && typeof unknownOpError.details === 'object');
-// 2026-09-04 permission ops（stub 无 session → state 走空事件折叠；set 缺 session 报协议错误）
+//  permission ops（stub 无 session → state 走空事件折叠；set 缺 session 报协议错误）
 const permState = await call('permission.state', { sessionId: 'session-main' });
 check('permission.state 可用且返回预设选项', permState.ok === true && permState.value?.available === true && Array.isArray(permState.value?.options) && permState.value.options.length >= 2);
 check('permission.set 未知预设拒绝', (await call('permission.set', { preset: 'nope' })).error !== undefined);

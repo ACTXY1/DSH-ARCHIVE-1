@@ -1,5 +1,5 @@
 /**
- * dsh-archive-evolution 人格更新方案生成辅助（2026-09-02 用户需求定稿）。
+ * dsh-archive-evolution 人格更新方案生成辅助（ 用户需求定稿）。
  *
  * 用户需求：人格更新方案改由独立 API 调用大模型生成；生成时把
  *   ① 近 24 小时对话记录（★重点标记：用户对 AI 提出的要求/建议/期望/纠正类对话）
@@ -10,7 +10,7 @@
  *   - action: add（新增条目，须给出 section）
  *   - action: refine（修正既有条目，须原样引用清单中出现的条目 id）
  *
- * 解析器说明：dsh node_modules 未内置 js-yaml 等 YAML 库（2026-09-02 查证），
+ * 解析器说明：dsh node_modules 未内置 js-yaml 等 YAML 库（ 查证），
  * 本模块实现零依赖的"严格 YAML 子集"解析器——仅支持本方案约定的 schema
  * （顶层 direction?/persona_updates:，条目 - action/section/id/content/importance/
  * rationale/evidence；content 等长文本用 | 块标量）。解析失败由调用方带
@@ -119,7 +119,7 @@ export async function gatherPersonaContext(ctx, deps = {}) {
   const persona = (() => { try { return ctx.persona?.get?.(); } catch { return null; } })();
   const rawSections = persona?.sections;
   if (rawSections && typeof rawSections === 'object') {
-    // 分区集合 = 全部分区（含空分区）——空分区同样允许模型 add 新条目（2026-09-02 修复）
+    // 分区集合 = 全部分区（含空分区）——空分区同样允许模型 add 新条目（ 修复）
     for (const sec of Object.keys(rawSections)) {
       sections.push(sec);
       const list = Array.isArray(rawSections[sec]) ? rawSections[sec] : [];
@@ -241,7 +241,7 @@ export function unquote(v) {
 
 /** 去掉标量值行尾的 YAML 内联注释（` # …`）。schema 示例里就带行尾注释
  *  （`- action: add  # add=新增条目…`），模型照抄示例时会把这些注释原样带进输出——
- *  不剥离会导致 action 值变成 "add  # add=…" 而匹配失败、条目被静默丢弃（2026-09-03 修复）。
+ *  不剥离会导致 action 值变成 "add  # add=…" 而匹配失败、条目被静默丢弃（ 修复）。
  *  仅当 # 前是空白且在引号外时视为注释（content 块正文按块标量整体收集，不走此路径）。 */
 export function stripInlineComment(v) {
   const s = String(v ?? '');

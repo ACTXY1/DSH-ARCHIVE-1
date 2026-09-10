@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
 #  DSH-ARCHIVE 手机版 首次安装 / 移动项目位置 一键修复
-#
 #  适用环境：安卓 Termux + proot-distro Ubuntu（glibc）
 #  用法：进入项目根目录后执行  bash install.sh
-#
 #  功能（与 Windows 版 fix-project-location.ps1 等价）：
 #    0. 校验项目根
 #    1. 环境检测：node / npm / pnpm（**项目自带 dsh 引擎，无需全局 dsh CLI**）
@@ -16,7 +14,6 @@
 #    7. 数据目录就绪
 #    8. 下载 ollama linux-arm64 二进制（模型由 start.sh 按需拉取）
 #    9. 验证 profile 可加载
-#
 #  设计：脚本位置即项目根，不硬编码任何绝对路径；可重复执行（幂等）。
 # ============================================================
 set -uo pipefail
@@ -50,7 +47,7 @@ ok "Node.js $(node -v)"
 need npm || die '未找到 npm（Node.js 应自带）'
 need pnpm || { log '未找到 pnpm，正在安装...'; npm install -g pnpm >/dev/null 2>&1 || die 'pnpm 安装失败'; }
 ok "pnpm $(pnpm --version 2>/dev/null)"
-# 项目自带 dsh 引擎（2026-09-10 独立化）：版本在 dsh/package.json 中精确锁定，随步骤 6 的
+# 项目自带 dsh 引擎（ 独立化）：版本在 dsh/package.json 中精确锁定，随步骤 6 的
 # pnpm install 安装；此处仅报告——不再安装、也不再依赖全局 dsh CLI。
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 if [ -f "$ENGINE_BIN" ]; then

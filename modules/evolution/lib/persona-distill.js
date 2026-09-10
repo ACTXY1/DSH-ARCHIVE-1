@@ -1,5 +1,5 @@
 /**
- * dsh-archive-evolution 人格一键凝练辅助（2026-09-08 用户需求：人格页手动触发）。
+ * dsh-archive-evolution 人格一键凝练辅助（ 用户需求：人格页手动触发）。
  *
  * 用户需求：人格页按下按钮 → 调 LLM 自动凝练全部人格条目，按项目已有分类（六分区）
  * 及原条目的分类归类后，**严格按 YAML** 重新编写条目；凝练同时不丢失人格信息与要求，
@@ -192,7 +192,7 @@ export function parseDistillPlan(text, sections) {
   for (const rawLine of body) {
     const trimmed = rawLine.trim();
     const indent = leadingSpaces(rawLine);
-    // 块标量优先于注释/空行判断（块正文里的 # 行与空行是正文，2026-09-03 同款教训）
+    // 块标量优先于注释/空行判断（块正文里的 # 行与空行是正文， 同款教训）
     if (blockKey) {
       if (indent > blockIndent || trimmed === '') { blockLines.push(rawLine); continue; }
       flushBlock();

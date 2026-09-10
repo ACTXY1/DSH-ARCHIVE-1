@@ -1,16 +1,13 @@
 ﻿# ============================================================
 #  push-seed.ps1 —— 首次推送种子仓库到远程（私有）
-#
 #  前置：先在 GitHub 建一个【空】私有仓库（不要勾选 README/license 等
 #        任何初始化文件），仓库名建议 dsh-archive（或 DSH-ARCHIVE）。
-#
 #  用法（在项目根目录 C:/DSH-ARCHIVE 下）：
 #    powershell -NoProfile -ExecutionPolicy Bypass -File push-seed.ps1
 #    或直接指定 URL：
 #    powershell -NoProfile -ExecutionPolicy Bypass -File push-seed.ps1 `
 #        -RepoUrl https://github.com/<你的账号>/dsh-archive.git `
 #        -GiteeUrl https://gitee.com/<你的账号>/dsh-archive.git   # 可选镜像
-#
 #  说明：推送走本机 git 凭据（HTTPS 凭据管理器 / SSH 均可）；
 #        本脚本不接收、不保存任何 token。
 # ============================================================

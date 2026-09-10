@@ -31,25 +31,25 @@ const DESCRIBE_IMAGE_NS = settingsNamespace('describe-image');
 
 /** 开机自启 vbs（启动文件夹）。 */
 const AUTOSTART_VBS = join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'DSH-ARCHIVE-AutoStart.vbs');
-/** 勿扰模式设置命名空间（2026-08-30：开启后仅不响提示音，通知等其余不变）。 */
+/** 勿扰模式设置命名空间（开启后仅不响提示音，通知等其余不变）。 */
 const DND_SCHEMA = z.object({ enabled: z.boolean().default(false) });
 const DND_NS = settingsNamespace('archive-dnd');
-/** 聊天 UI 设置命名空间（2026-08-30：流式输出开关，SSE 实时增量渲染；关闭则退化为轮询）。 */
+/** 聊天 UI 设置命名空间（流式输出开关，SSE 实时增量渲染；关闭则退化为轮询）。 */
 const UI_SCHEMA = z.object({ streaming: z.boolean().default(true) });
 const UI_NS = settingsNamespace('archive-ui');
-/** 一键更新去重命名空间（方案 D，2026-09-02：同一远程版本只主动通知一次）。 */
+/** 一键更新去重命名空间（方案 D，：同一远程版本只主动通知一次）。 */
 const UPDATER_SCHEMA = z.object({ lastNotifiedCommit: z.string().default('') });
 const UPDATER_NS = settingsNamespace('archive-updater');
-/** 自循环降频开关命名空间（2026-08-31 起由 loop 模块自身注册——见 archive-loop；此处不再注册，
+/** 自循环降频开关命名空间（ 起由 loop 模块自身注册——见 archive-loop；此处不再注册，
  *  避免与 loop 的 ctx.inject(['settings']) 注册冲突/时序问题）。 */
-/** 备份进行中标志（2026-08-30：关闭按钮等待备份完成后才退出，避免备份目录不完整）。 */
+/** 备份进行中标志（关闭按钮等待备份完成后才退出，避免备份目录不完整）。 */
 let backupInFlight = false;
 /**
- * 上次备份开始时刻（2026-08-30 修复：RPC 分发可能串行化，两个并行请求不会同时处于 in-flight，
+ * 上次备份开始时刻（ 修复：RPC 分发可能串行化，两个并行请求不会同时处于 in-flight，
  * 单纯 in-flight 守卫拦不住连点/重复调用 → 用 3s 时间窗去重，任何分发模型下都生效）。
  */
 let lastBackupAt = 0;
-/** 每日简报生成提示词（2026-08-30）。 */
+/** 每日简报生成提示词。 */
 const REPORT_PROMPT = `你是 DSH-ARCHIVE 的每日简报助手。根据提供的"最近 24 小时"素材（自循环决策、主动发言、记忆统计、通知、定时任务），生成一份简洁中文简报：
 1. 一句话总结（今天 AI 的整体状态）；
 2. 分节要点：想了什么（思考/决策）｜做了什么（行动/发言）｜记住了什么（记忆变化）；
@@ -67,8 +67,8 @@ const MAIN_SESSION_ID = 'session-main';
 export function apply(ctx, rawConfig) {
   // 数据根由 cordis.patch.yml 显式配置（dataRoot），与 memory/schedule/notify 一致。
   // 备份根 = 项目根 backups（dataRoot 上级的上级，如 dataRoot=dsh/data → 项目根=DSH-ARCHIVE）；
-  // 2026-09-01 修复回归：此前 PROJECT_ROOT 只上溯一级 → 备份错落在 dsh\backups。
-  // 2026-09-01-2 修正：主会话工作目录（MAIN_CWD）保持"数据根上级"（=dsh profile 目录）——
+  //  修复回归：此前 PROJECT_ROOT 只上溯一级 → 备份错落在 dsh\backups。
+  //  修正：主会话工作目录（MAIN_CWD）保持"数据根上级"（=dsh profile 目录）——
   // 主会话是持久化会话（存储目录 --...-dsh-- 由 cwd 生成，改 cwd 会破坏存储路径定位），
   // 其 agent 实际工作目录即 dsh；若把 MAIN_CWD 改成项目根，置顶逻辑找 path=项目根 工作区
   // attach 主会话时会因 cwd≠path 被 dsh 原生校验拒绝（静默失败）。BACKUP_ROOT 独立取项目根。
@@ -76,19 +76,19 @@ export function apply(ctx, rawConfig) {
   const DATA_ROOT = String(cfg.dataRoot ?? '').trim() || join(process.cwd(), 'data');
   const PROJECT_ROOT = resolve(DATA_ROOT, '..', '..');
   const MAIN_CWD = resolve(DATA_ROOT, '..');
-  /** 一键备份根目录（2026-08-30：项目文件夹内独立 backups/，便于用户查找）。 */
+  /** 一键备份根目录（项目文件夹内独立 backups/，便于用户查找）。 */
   const BACKUP_ROOT = join(PROJECT_ROOT, 'backups');
-  /** 系统监控采样（2026-08-30：每 5 分钟一条，cap 240）。 */
+  /** 系统监控采样（每 5 分钟一条，cap 240）。 */
   const METRICS_PATH = join(DATA_ROOT, 'metrics.jsonl');
   const logger = ctx.root?.logger?.('archive-control') ?? console;
 
-  // 总会话：优先恢复持久化会话，否则新建（2026-08-29 修复 fatal）。
+  // 总会话：优先恢复持久化会话，否则新建（ 修复 fatal）。
   // 原因：固定 id 每次启动全新 create，首次 flush 时持久化协调器发现磁盘已有该 id 的日志
   // 且 live seed 不覆盖 → "id collision" fatal。正确做法是经 sessionPersistence.prepare 恢复
   // （seed=完整存储日志，天然覆盖），恢复不了且未持久化才 create。
   // 总会话：优先经 agents.resume 恢复（session+agent 一起 live），否则 agents.create。
   // 原因①：固定 id 每次全新 create 会撞持久化协调器 "id collision" fatal（恢复优先，见下）。
-  // 原因②（2026-08-29 修复）：此前只 sessions.enter 而不建 agent → session live 但 agent 不存在，
+  // 原因②（ 修复）：此前只 sessions.enter 而不建 agent → session live 但 agent 不存在，
   //   对话 prompt 的 resume 路径撞 "cannot prepare session while it is live"（prepare 只接受非 live 会话）。
   //   agents.resume/create 内部完成 persistence load + enter + agent 发布（含 announce），
   //   prompt 走 fencedLiveAgent 直接命中 live agent。无 agents（headless 面）才退回手动的
@@ -207,11 +207,11 @@ export function apply(ctx, rawConfig) {
     });
   });
 
-  // 总会话注入（2026-09-03 分级改造，防机器状态文案泄露进对话/割裂对话）：
+  // 总会话注入（ 分级改造，防机器状态文案泄露进对话/割裂对话）：
   //  - 仅 scope='chat' 的记录（AI 面向用户的自然消息：loop 主动发言 / notify_send / 用户设置的定时提醒）
   //    注入 session-main 对话流；scope='panel'（主动行动状态串、自进化/潜意识/停机错过/更新提示等系统状态）
   //    只进通知流水与总控「通知」页——此前全部 notify 都被追加成 assistant 消息，"🤖 主动行动：已执行
-  //    memory_write…"等操作流水以 AI 普通回复的样式出现在用户对话里（2026-09-03 03:49 实机泄露）。
+  //    memory_write…"等操作流水以 AI 普通回复的样式出现在用户对话里（ 03:49 实机泄露）。
   //  - 送达时机门控：对话回合进行中（conversing/thinking）或静默窗内（用户刚发消息/回合刚结束）到达的
   //    chat 级记录先挂起，等回合并行输出结束再按序送达——避免提醒/主动消息插进 AI 正在回复的对话中间（割裂）。
   const chatHold = { queue: [], since: 0, chain: false };
@@ -239,7 +239,7 @@ export function apply(ctx, rawConfig) {
           time: record.at,
         },
       }, { surfaceOp: 'append' });
-      // 2026-08-30 审计修复：flush 异步失败兜底，防 unhandled rejection 崩溃
+      //  flush 异步失败兜底，防 unhandled rejection 崩溃
       void ctx.sessions.flush(mainSession).catch((e) => logger.warn(`archive-control: 总会话 flush 失败：${e?.message ?? e}`));
     } catch (error) {
       logger.warn(`archive-control: 总会话注入失败：${error.message}`);
@@ -284,10 +284,10 @@ export function apply(ctx, rawConfig) {
 
   /** RPC 操作表（闭包内定义，持有 ctx）。 */
 
-  // ---- 一键更新（方案 D，2026-09-02）：git 远程版本检查与更新触发 ----
+  // ---- 一键更新（方案 D）：git 远程版本检查与更新触发 ----
   const execFileP = promisify(execFile);
 
-  // git 代理自动识别（2026-09-03）：git 不读 Windows 系统代理——开着 v2rayN/Clash 等代理软件时，
+  // git 代理自动识别：git 不读 Windows 系统代理——开着 v2rayN/Clash 等代理软件时，
   // 若只设置了系统代理（或仅监听 socks 口），git fetch 仍走直连，检测更新/一键更新必失败。
   // 解析顺序：①环境变量代理 → ②git 全局/本地 http.proxy → ③Windows 系统代理（registry；
   // 纯 host:port 无法判断协议 → 先做端口协议探测，识别 socks5h/http 再选用，避免把 socks 口当 http）。
@@ -329,7 +329,7 @@ export function apply(ctx, rawConfig) {
   const normalizeProxy = (raw) => {
     const p = String(raw ?? '').trim();
     if (!p) return '';
-    return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p) ? p : `http://${p}`;
+    return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p) ? p: `http://${p}`;
   };
   const readSystemProxy = async () => {
     if (process.platform !== 'win32') return null;
@@ -409,7 +409,7 @@ export function apply(ctx, rawConfig) {
   let updaterCheckInflight = null;
 
   const OPS = {
-    // 总会话/概览（2026-08-30：每个服务调用单独容错——任一服务异常不再让整个总控页失败）
+    // 总会话/概览（每个服务调用单独容错——任一服务异常不再让整个总控页失败）
     'overview': () => ({
       clock: { now: ctx.virtualClock.format() },
       loop: (() => { try { return { stats: ctx.loop.stats(), sleep: ctx.loop.state().sleep }; } catch { return null; } })(),
@@ -427,7 +427,7 @@ export function apply(ctx, rawConfig) {
     'persona.update': (a) => ctx.persona.update(a.id, { content: a.content, importance: a.importance, confidence: a.confidence, by: a.by ?? 'user' }),
     'persona.remove': (a) => ctx.persona.remove(a.id, { by: 'user' }),
     'persona.rollback': (a) => ctx.persona.rollback(a.version, a.by ?? 'user'),
-    // 人格一键凝练（2026-09-08）：LLM 无损整理全部条目（合并相同/相似、按六分区归类、严格 YAML 重写）
+    // 人格一键凝练：LLM 无损整理全部条目（合并相同/相似、按六分区归类、严格 YAML 重写）
     // → 先预览（不生效）→ 用户确认后经 persona.replace 整体重建（版本+1、留档、可回滚）。
     'persona.distillPreview': () => ctx.evolution.distillPersona(),
     'persona.distillApply': (a) => {
@@ -439,14 +439,14 @@ export function apply(ctx, rawConfig) {
     'loop.stats': () => ctx.loop.stats(),
     'loop.configure': (a) => ctx.loop.configure(a),
     'loop.trigger': (a) => ctx.loop.trigger(a.reason),
-    // 思维预设（2026-09-04-2）：用户指令注入（预设/指令 CRUD 走整存 save；命中预览供 UI 调试）
+    // 思维预设：用户指令注入（预设/指令 CRUD 走整存 save；命中预览供 UI 调试）
     'loop.instructions.get': () => ctx.loop.instructions.get(),
     'loop.instructions.save': (a) => ctx.loop.instructions.save(a.state),
     'loop.instructions.preview': (a) => ctx.loop.instructions.preview(a.text ?? '', a.presetId),
-    // 自循环活动流（2026-08-30）：从记忆库取 source=loop 的 thought 决策记录（排除已整合/遗忘的）
+    // 自循环活动流：从记忆库取 source=loop 的 thought 决策记录（排除已整合/遗忘的）
     'loop.history': (a) => {
       const limit = Math.min(100, Number(a?.limit) || 60);
-      // 2026-09-07 审计修复：取数窗口从 100 提到 store 硬上限 200——高频期（用户消息每回合落一条
+      //  取数窗口从 100 提到 store 硬上限 200——高频期（用户消息每回合落一条
       // conversation 记忆）thought 决策记录会被挤出前 100 行，导致活动流静默缺记录（无翻页）。
       // store.list 上限即 200，超出部分属展示窗口设计边界。
       const all = ctx.memory.list({ limit: 200 });
@@ -472,7 +472,7 @@ export function apply(ctx, rawConfig) {
     'evolution.view': (a) => ctx.evolution.view(a.limit),
     'evolution.stats': () => ctx.evolution.stats(),
     'evolution.suggest': async (a) => {
-      // 2026-09-08 手动触发成功且产出候选 → 铃铛通知（与每日 22:00 自动候选同款文案/通道）。
+      //  手动触发成功且产出候选 → 铃铛通知（与每日 22:00 自动候选同款文案/通道）。
       // 仅 UI 手动路径走本 OPS；agent 工具 evolution_suggest 直调服务层，不在此重复打扰。
       const res = await ctx.evolution.suggest({ by: a.by ?? 'user' });
       const n = (res?.candidateIds ?? []).length;
@@ -488,19 +488,19 @@ export function apply(ctx, rawConfig) {
       }
       return res;
     },
-    // 2026-08-31 审计修复：一致性协同已统一在 evolution 服务层发射（approve/autoApply 全路径覆盖，
+    //  一致性协同已统一在 evolution 服务层发射（approve/autoApply 全路径覆盖，
     // 含 agent 工具与潜意识自动微调）——此处不再手动调用，避免双触发重复入轨
     'evolution.approve': (a) => ctx.evolution.approve(a.candidateId, { by: 'user', confirm: a.confirm }),
     'evolution.reject': (a) => ctx.evolution.reject(a.candidateId, { by: 'user' }),
     'evolution.rollback': (a) => ctx.evolution.rollback(a.candidateId, { by: 'user', confirm: a.confirm }),
-    // 人格一致性（2026-08-31）：开关/阈值/轨迹坐标/拦截修订倒叙修正记录
+    // 人格一致性：开关/阈值/轨迹坐标/拦截修订倒叙修正记录
     'consistency.state': () => ctx.consistency.state(),
     'consistency.stats': () => ctx.consistency.stats(),
     'consistency.pca': () => ctx.consistency.pca(),
     'consistency.log': (a) => ctx.consistency.log(a.limit),
     'consistency.revisions': () => ctx.consistency.revisionsMap(),
     'consistency.configure': (a) => ctx.consistency.configure(a),
-    // 潜意识系统·梦境引擎（2026-08-31）：状态/配置/手动触发/日志/Phi 模型管理
+    // 潜意识系统·梦境引擎：状态/配置/手动触发/日志/Phi 模型管理
     'subconscious.state': () => ctx.subconscious.state(),
     'subconscious.stats': () => ctx.subconscious.stats(),
     'subconscious.log': (a) => ctx.subconscious.log(a.limit),
@@ -558,7 +558,7 @@ export function apply(ctx, rawConfig) {
         deepseekModel: 'deepseek-v4-flash',
       };
     },
-    // 未配置模型提供商检测（2026-08-30：聊天发送前拦截提示用；与 models.get 口径一致）：
+    // 未配置模型提供商检测（聊天发送前拦截提示用；与 models.get 口径一致）：
     // DeepSeek 官方密钥（credentials 解析）+ 自定义 OpenAI 兼容 provider（settings archive-models）任一可用即视为已配置
     'models.checkReady': async () => {
       let deepseekConfigured = false;
@@ -581,7 +581,7 @@ export function apply(ctx, rawConfig) {
       return { configured, deepseekConfigured, customConfigured, reason: configured ? '' : '未配置模型提供商：请先在「模型」页配置 DeepSeek 官方密钥或启用自定义提供商' };
     },
     'models.setProviders': async (a) => {
-      // 2026-09-07 审计修复（高危）：models.get 只回 apiKeySet 布尔、从不回明文 apiKey（安全惯例），
+      //  （高危）：models.get 只回 apiKeySet 布尔、从不回明文 apiKey（安全惯例），
       // 而前端保存/启停/删除/编辑都会把整表 providers 原样回传——若把空 apiKey 直接落盘，
       // 任意一次操作都会静默清空全部自定义提供商的密钥（不可逆）。修法：先读旧配置按 id 合并，
       // apiKey 留空 = 保留原密钥（与 vision.config.set 的"留空保留"惯例一致）；显式传新值才覆盖。
@@ -602,7 +602,7 @@ export function apply(ctx, rawConfig) {
         };
       }) : [];
       await settings.update(ARCHIVE_MODELS_NS, { providers: list });
-      // 2026-09-03：配置写入成功后唤醒 loop 凭证冷却（无 key 期间 loop 低频暂停，配置后立即恢复）
+      //：配置写入成功后唤醒 loop 凭证冷却（无 key 期间 loop 低频暂停，配置后立即恢复）
       try { ctx.emit('archive/credentials-changed', { at: Date.now() }); } catch { /* 事件失败不阻断 */ }
       return { saved: true, count: list.length };
     },
@@ -612,11 +612,11 @@ export function apply(ctx, rawConfig) {
       const creds = ctx.get('credentials');
       if (!creds || typeof creds.set !== 'function') throw new Error('credentials 服务不可用');
       await creds.set('DEEPSEEK_API_KEY', key);
-      // 2026-09-03：配置写入成功后唤醒 loop 凭证冷却
+      //：配置写入成功后唤醒 loop 凭证冷却
       try { ctx.emit('archive/credentials-changed', { at: Date.now() }); } catch { /* 事件失败不阻断 */ }
       return { saved: true };
     },
-    // 自定义提供商连通性测试（2026-08-30 新增：模型页"测试连接"，避免配错后自循环静默瘫痪）
+    // 自定义提供商连通性测试（ 新增：模型页"测试连接"，避免配错后自循环静默瘫痪）
     'models.testProvider': async (a) => {
       const baseURL = String(a.baseURL ?? '').trim().replace(/\/+$/, '');
       const model = String(a.model ?? '').trim();
@@ -649,7 +649,7 @@ export function apply(ctx, rawConfig) {
     },
     'vision.config.set': async (a) => {
       const patch = {};
-      // 2026-08-31 审计修复：baseURL/model/apiKeyEnv 允许显式清空（此前空串被跳过 → 界面显示已保存实则旧值保留）；
+      //  baseURL/model/apiKeyEnv 允许显式清空（此前空串被跳过 → 界面显示已保存实则旧值保留）；
       // apiKey 留空仍保留原值（密钥不回显的编辑惯例）
       if (a.baseURL !== undefined) patch.baseURL = String(a.baseURL).trim();
       if (a.model !== undefined) patch.model = String(a.model).trim();
@@ -662,7 +662,7 @@ export function apply(ctx, rawConfig) {
       return { saved: true, keys: Object.keys(patch) };
     },
     // 识图测试（全新 UI 专用）：host 侧调视觉模型（端点/模型/密钥读 describe-image 配置，
-    // 2026-08-30 修复：此前硬编码 DeepSeek 官方，与"识图-提供商配置"完全脱节，改了配置测试仍走官方）
+    //  修复：此前硬编码 DeepSeek 官方，与"识图-提供商配置"完全脱节，改了配置测试仍走官方）
     'vision.test': async (a) => {
       const p = String(a?.path ?? '').trim();
       if (!p) throw new Error('vision.test: 图片路径/URL 必填');
@@ -715,7 +715,7 @@ export function apply(ctx, rawConfig) {
     },
     // 关闭：保存未保存数据（flush 全部会话）→ 优雅关闭有资源服务 → 退出进程（端口随之释放）
     'system.shutdown': async () => {
-      // 2026-08-30：若备份进行中，等待其完成后再关闭（避免备份目录不完整；上限 60s）
+      //：若备份进行中，等待其完成后再关闭（避免备份目录不完整；上限 60s）
       const backupWaitStart = Date.now();
       while (backupInFlight && Date.now() - backupWaitStart < 60000) {
         await new Promise((resolve) => setTimeout(resolve, 500));
@@ -727,7 +727,7 @@ export function apply(ctx, rawConfig) {
           try { await ctx.sessions.flush(s); flushed++; } catch { /* 单个失败不阻断 */ }
         }
       } catch { /* 会话服务异常不阻断 */ }
-      // 2026-08-30 整体恢复：存在 .restore-marker 时，关闭有连接的服务后用暂存内容覆盖 data（重启即恢复）
+      //  整体恢复：存在 .restore-marker 时，关闭有连接的服务后用暂存内容覆盖 data（重启即恢复）
       const dataRoot = DATA_ROOT;
       const marker = join(dataRoot, '.restore-marker');
       const pending = join(dataRoot, '.restore-pending');
@@ -753,11 +753,11 @@ export function apply(ctx, rawConfig) {
       }
       try { ctx.schedule?.close?.(); } catch { /* ignore */ }
       try { ctx.memory?.close?.(); } catch { /* ignore */ }
-      // 2026-08-31：人格一致性轨迹 flush（节流写盘未落的内容强制落盘）
+      //：人格一致性轨迹 flush（节流写盘未落的内容强制落盘）
       try { ctx.consistency?.close?.(); } catch { /* ignore */ }
-      // 2026-08-31：潜意识状态（潜记忆池/草案/呓语）flush
+      //：潜意识状态（潜记忆池/草案/呓语）flush
       try { ctx.subconscious?.close?.(); } catch { /* ignore */ }
-      // 2026-08-30-16：关闭按钮 = 完全退出 —— 顺带关闭系统托盘（tray.ps1 独立进程）。
+      //：关闭按钮 = 完全退出 —— 顺带关闭系统托盘（tray.ps1 独立进程）。
       // tray.pid 由 tray.ps1 写入两行：PID / 进程名；按名校验防 PID 复用误杀；
       // 每步带 bootLine 诊断输出；pid 文件无论 kill 成败都删除（避免残留）。
       const trayPidFile = join(DATA_ROOT, 'tray.pid');
@@ -786,7 +786,7 @@ export function apply(ctx, rawConfig) {
       setTimeout(() => { try { process.exit(0); } catch { /* ignore */ } }, 400);
       return { ok: true, flushed };
     },
-    // 权限预设（2026-09-04，与 DSH 本体 /permission 同源）：读取/切换当前会话的
+    // 权限预设（与 DSH 本体 /permission 同源）：读取/切换当前会话的
     // sandbox 模式 + 审批策略。宿主侧服务 ctx.permissionPresets 由 base 行提供
     // （read-only / workspace-write / danger-full-access 三档），archive 实例已随
     // @deepseek-ai/dsh-base 挂载；此处仅做 RPC 桥，不重复实现折叠逻辑。
@@ -837,9 +837,9 @@ export function apply(ctx, rawConfig) {
       return { ok: true, preset, sessionId };
     },
     // 彻底清理一个会话：从工作区 detach + 删除持久化目录（用于清除测试/遗留会话）
-    // 2026-08-30 安全修复：①id 校验（防目录穿越）②禁止删除主会话 ③扫描 sessions 根下全部
+    //  安全修复：①id 校验（防目录穿越）②禁止删除主会话 ③扫描 sessions 根下全部
     // 子目录（此前硬编码 --C-DSH-ARCHIVE--，项目外工作区会话删不掉、路径硬编码失效）
-    // 2026-08-30 附加：UI 的 session.create（api-gateway 通道）创建后不 attach 工作区 → 由本 op 补 attach
+    //  附加：UI 的 session.create（api-gateway 通道）创建后不 attach 工作区 → 由本 op 补 attach
     'workspace.attach': async (a) => {
       const workspaceId = String(a?.workspaceId ?? '').trim();
       const sessionId = String(a?.sessionId ?? '').trim();
@@ -851,9 +851,9 @@ export function apply(ctx, rawConfig) {
       await ws.attachSession(sessionId);
       return { attached: true, sessionId, workspaceId };
     },
-    // 2026-08-30 迭代：工作区目录选择（类似 DSH 原生）——调用宿主 directoryPicker 的
+    //  工作区目录选择（类似 DSH 原生）——调用宿主 directoryPicker 的
     // native 能力（Windows 上弹出系统文件夹选择对话框 IFileOpenDialog；选目录或取消）。
-    // 2026-08-30 修复：native pick 契约签名 pick(signal: AbortSignal)，必传 signal，
+    //  修复：native pick 契约签名 pick(signal: AbortSignal)，必传 signal，
     // 否则 pick 内部 signal.aborted 直接 TypeError（对话框无法弹出）。signal 来自
     // connection handle 的 request.signal（真实 AbortSignal）；缺省时用新 controller 兜底。
     'directory.pick': async (_args, signal) => {
@@ -866,7 +866,7 @@ export function apply(ctx, rawConfig) {
       }
       throw new Error(`不支持的目录选择能力：${cap.kind ?? 'unknown'}`);
     },
-    // 2026-09-02 手机端修复：browse 能力（Linux/远程/手机无系统对话框时）——
+    //  手机端修复：browse 能力（Linux/远程/手机无系统对话框时）——
     // 前端自绘目录浏览弹窗：capability 探测 + 单层列目录 + 建目录。
     'directory.capability': async () => {
       const dp = ctx.get('directoryPicker');
@@ -907,7 +907,7 @@ export function apply(ctx, rawConfig) {
       if (id === MAIN_SESSION_ID) throw new Error('不能删除主会话');
       if (!/^[A-Za-z0-9._-]{1,80}$/.test(id)) throw new Error('purgeSession: 非法的会话 id');
       let detached = false;
-      // 2026-08-30：尽量注销该会话的 agent（dsh 原生不随会话删除自动清理；空闲 agent 无副作用，能清则清）
+      //：尽量注销该会话的 agent（dsh 原生不随会话删除自动清理；空闲 agent 无副作用，能清则清）
       try {
         const agents = ctx.get('agents');
         const ag = agents?.get?.(id);
@@ -937,10 +937,10 @@ export function apply(ctx, rawConfig) {
       } catch { /* ignore */ }
       return { detached, purged };
     },
-    // 一键备份（2026-08-30）：checkpoint 各 SQLite → 全量复制 dsh/data → backups/backup-<时间戳>/
+    // 一键备份：checkpoint 各 SQLite → 全量复制 dsh/data → backups/backup-<时间戳>/
     // kind 区分：manual（手动按钮）/ auto（每 3 天自动，保留最近 10 份）
     'system.backup': async (a) => {
-      // 2026-08-30 修复：并发双触发（双击/并行调用）曾同秒写同一备份目录（内容竞争）或生成重复目录。
+      //  修复：并发双触发（双击/并行调用）曾同秒写同一备份目录（内容竞争）或生成重复目录。
       // ① in-flight 守卫（重叠时拒绝）；② 3s 时间窗去重（RPC 串行化时 in-flight 已复位，靠时间窗兜底）。
       const now0 = Date.now();
       if (backupInFlight || now0 - lastBackupAt < 3000) throw new Error('备份进行中，请稍候再试');
@@ -966,7 +966,7 @@ export function apply(ctx, rawConfig) {
         };
         const { files, bytes } = walk(dest);
         const meta = { at: Date.now(), stamp, kind, redacted: true, source: DATA_ROOT, files, bytes, note: '全量数据备份（会话/工作区/设置/附件/记忆/任务/人格/通知/进化/技能；凭据已脱敏）' };
-        // 2026-08-30 备份脱敏：不备份明文凭据——删除 credentials.yaml，settings.yaml 的 apiKey 置为占位
+        //  备份脱敏：不备份明文凭据——删除 credentials.yaml，settings.yaml 的 apiKey 置为占位
         try { rmSync(join(dest, 'credentials.yaml'), { force: true }); } catch { /* ignore */ }
         try {
           const settingsFile = join(dest, 'settings.yaml');
@@ -1003,7 +1003,7 @@ export function apply(ctx, rawConfig) {
     'backup.list': async () => {
       const { existsSync, readdirSync, statSync } = await import('node:fs');
       if (!existsSync(BACKUP_ROOT)) return { backups: [] };
-      // 2026-09-03 性能修复（阶段1）：system.backup 完成时已把 {files,bytes} 写入该备份的 backup.json
+      //  性能修复（阶段1）：system.backup 完成时已把 {files,bytes} 写入该备份的 backup.json
       // （见 system.backup 的 walk 统计），此处直接采用记录值，避免每次打开总控页都全量递归遍历
       // 备份目录（同步 readdirSync/statSync 在手机慢 I/O 下可致数秒事件循环阻塞，波及并行 RPC）。
       // dirBytes 仅兜底用于无 backup.json 的旧备份。
@@ -1035,7 +1035,7 @@ export function apply(ctx, rawConfig) {
         .sort((a, b) => b.at - a.at);
       return { backups, root: BACKUP_ROOT };
     },
-    // 整体恢复（2026-08-30）：把项目恢复到备份记录的状态（覆盖当前数据，需重启生效）。
+    // 整体恢复：把项目恢复到备份记录的状态（覆盖当前数据，需重启生效）。
     // 流程：先自动备份当前状态（可回退）→ 备份内容暂存 data/.restore-pending + 写 marker →
     // 点击「关闭」按钮时，进程退出前完成覆盖（当前凭据 credentials.yaml 保留）。
     'system.restore': async (a) => {
@@ -1057,10 +1057,10 @@ export function apply(ctx, rawConfig) {
       bootLine(`[archive-control] 恢复已暂存：${dir}（重启后生效；当前状态已备份至 ${cur.path}）`);
       return { pending: true, from: dir, preBackup: cur.path, note: '恢复已暂存：请点击右上角「关闭」按钮重启，进程退出前会自动把项目整体恢复到该备份状态（当前凭据保留；备份为脱敏版，模型密钥需重新填写）' };
     },
-    // 每日简报（2026-08-30）：汇总最近 24h 记忆/决策/发言/通知/任务 → LLM 生成带时间戳简报
+    // 每日简报：汇总最近 24h 记忆/决策/发言/通知/任务 → LLM 生成带时间戳简报
     'report.daily': async () => {
       const since = Date.now() - 24 * 3600000;
-      // 2026-08-30：仅统计活跃记忆（排除已整合软遗忘/归档），简报不再包含重复决策
+      //：仅统计活跃记忆（排除已整合软遗忘/归档），简报不再包含重复决策
       const mems = (ctx.memory.list({ limit: 200 }) || []).filter((m) => m.createdAt >= since && m.forgotten === 0);
       const notifs = (ctx.notify.view(100)?.notifications || []).filter((n) => n.at >= since);
       const tasks = (ctx.schedule.list(100) || []).filter((t) => (t.firedAt ?? 0) >= since || (t.createdAt ?? 0) >= since);
@@ -1075,7 +1075,7 @@ export function apply(ctx, rawConfig) {
       ].join('\n\n');
       const llm = ctx.get('llm');
       if (!llm || typeof llm.stream !== 'function') throw new Error('LLM 服务不可用，无法生成简报');
-      // 自定义 OpenAI 兼容 provider 优先，失败回退官方（2026-08-30）
+      // 自定义 OpenAI 兼容 provider 优先，失败回退官方
       let brief = '';
       const custom = (() => {
         try {
@@ -1086,7 +1086,7 @@ export function apply(ctx, rawConfig) {
         } catch { return null; }
       })();
       if (custom) {
-        // 2026-08-30 韧性补丁：自定义 provider 请求加 60s 超时（此前无 signal，端点挂起会让简报 RPC 永久卡住）
+        //  韧性补丁：自定义 provider 请求加 60s 超时（此前无 signal，端点挂起会让简报 RPC 永久卡住）
         const ctrl2 = new AbortController();
         const timer2 = setTimeout(() => ctrl2.abort(), 60000);
         try {
@@ -1106,7 +1106,7 @@ export function apply(ctx, rawConfig) {
         } finally { clearTimeout(timer2); }
       }
       if (!brief) {
-        // 2026-09-01 修复：官方流偶发空返回/网络抖动时重试一次（同 loop callLlm 2026-08-30 模式），
+        //  修复：官方流偶发空返回/网络抖动时重试一次（同 loop callLlm  模式），
         // 此前直接抛"简报生成失败：LLM 未返回内容"（实测偶发复现，重试即成功）
         let lastErr = null;
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -1117,7 +1117,7 @@ export function apply(ctx, rawConfig) {
               model: 'deepseek-v4-flash',
               system: REPORT_PROMPT,
               messages: [{ role: 'user', content: [{ type: 'text', text: material }] }],
-              // 2026-09-01-3：900 → 2000——推理模型（deepseek-v4-flash）reasoning 占满小预算致正文截断
+              //：900 → 2000——推理模型（deepseek-v4-flash）reasoning 占满小预算致正文截断
               maxTokens: 2000,
             });
             for await (const chunk of stream) {
@@ -1137,9 +1137,9 @@ export function apply(ctx, rawConfig) {
       if (!brief.trim()) throw new Error('简报生成失败：LLM 未返回内容');
       return { generatedAt: Date.now(), windowStart: since, brief, counts: { memories: mems.length, notifications: notifs.length, tasks: tasks.length, decisions: decisions.length } };
     },
-    // 记忆整合（2026-08-30）：把最近窗口的自循环 thought 凝练为一条语义记忆（手动触发；自动每日一次）
+    // 记忆整合：把最近窗口的自循环 thought 凝练为一条语义记忆（手动触发；自动每日一次）
     'memory.integrate': (a) => ctx.memory.integrate({ windowMs: a?.windowMs }),
-    // 从备份导入记忆（合并，id 去重；2026-08-30 一键导入）
+    // 从备份导入记忆（合并，id 去重； 一键导入）
     'memory.import': async (a) => {
       const dir = String(a?.backupDir ?? '').trim();
       if (!dir) throw new Error('backupDir 必填');
@@ -1158,15 +1158,15 @@ export function apply(ctx, rawConfig) {
       }
       return { removed, requested: ids.length };
     },
-    // 通知清空已读（2026-08-30）
+    // 通知清空已读
     'notify.clearRead': () => ctx.notify.clearRead(),
-    // token 用量（2026-08-30：会话级经 RPC 面 session.list 投影获取精确值；循环/进化按调用次数）
+    // token 用量（会话级经 RPC 面 session.list 投影获取精确值；循环/进化按调用次数）
     'system.tokenUsage': async () => {
       const session = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
       try {
         const port = 3081;
-        // 2026-08-31 审计修复：self-RPC 加超时（api-gateway 挂起/端口改动时不再整页卡死在
-        // Promise.all 里"总控加载中…"）；2026-09-03 阶段1：8s→3s——总控页已改为 overview
+        //  self-RPC 加超时（api-gateway 挂起/端口改动时不再整页卡死在
+        // Promise.all 里"总控加载中…"）； 阶段1：8s→3s——总控页已改为 overview
         // 先行渲染、本 op 后台补更，短超时即可兜底，不再让慢自调拖住页面。
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 3000);
@@ -1195,7 +1195,7 @@ export function apply(ctx, rawConfig) {
         note: '会话为精确 token（经 session 投影）；循环/进化按调用次数展示（未接入流式计费）',
       };
     },
-    // 系统监控（2026-08-30）：实时运行信息 + 历史采样（metrics.jsonl）
+    // 系统监控：实时运行信息 + 历史采样（metrics.jsonl）
     'system.metrics': () => {
       const mem = process.memoryUsage?.() ?? {};
       const now = Date.now();
@@ -1213,14 +1213,14 @@ export function apply(ctx, rawConfig) {
         sampledAt: now, history,
       };
     },
-    // 开机自启开关（2026-08-30）：启动文件夹 vbs 方式（schtasks 在本环境被系统拒绝）
+    // 开机自启开关：启动文件夹 vbs 方式（schtasks 在本环境被系统拒绝）
     'system.autostart': (a) => {
       if (a?.enabled === true) {
-        // 2026-08-30 审计修复：start.ps1 路径由数据根推导（此前硬编码 C:/DSH-ARCHIVE，分发/移动后自启失效）；
-        // 2026-09-01：PROJECT_ROOT 已是项目根（dataRoot 上级的上级），start.ps1 直接在项目根下
+        //  start.ps1 路径由数据根推导（此前硬编码 C:/DSH-ARCHIVE，分发/移动后自启失效）；
+        //：PROJECT_ROOT 已是项目根（dataRoot 上级的上级），start.ps1 直接在项目根下
         const startScript = join(PROJECT_ROOT, 'start.ps1');
         const content = `Set sh = CreateObject("WScript.Shell")\r\nsh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File ""${startScript}"" -NoOpen", 0, False\r\n`;
-        // 2026-08-31 审计修复（major）：'ascii' 编码会把中文路径按 latin1 截断成乱码（默认部署路径
+        //  （major）：'ascii' 编码会把中文路径按 latin1 截断成乱码（默认部署路径
         // 含"总文件夹"）→ VBS 路径损坏、开机自启静默失效。改 UTF-8 带 BOM（WSH 可正确解码）
         writeFileSync(AUTOSTART_VBS, `\uFEFF${content}`, 'utf8');
         return { enabled: true, path: AUTOSTART_VBS };
@@ -1231,7 +1231,7 @@ export function apply(ctx, rawConfig) {
       }
       return { enabled: existsSync(AUTOSTART_VBS), path: AUTOSTART_VBS };
     },
-    // 勿扰模式（2026-08-30）：开启后仅不响提示音，通知/桌面弹窗等其余不变；settings 持久化
+    // 勿扰模式：开启后仅不响提示音，通知/桌面弹窗等其余不变；settings 持久化
     'system.dnd': async (a) => {
       const settings = ctx.get('settings');
       if (a?.enabled === true || a?.enabled === false) {
@@ -1242,7 +1242,7 @@ export function apply(ctx, rawConfig) {
       const value = settings?.get?.(DND_NS) ?? {};
       return { enabled: value.enabled === true };
     },
-    // 聊天 UI 设置（2026-08-30）：流式输出开关——开=SSE 实时增量渲染（思考/回答逐字出现）；
+    // 聊天 UI 设置：流式输出开关——开=SSE 实时增量渲染（思考/回答逐字出现）；
     // 关=仅轮询刷新（消息按 3s 间隔出现）。settings 持久化，浏览器端读写。
     'ui.settings.get': () => {
       const settings = ctx.get('settings');
@@ -1256,10 +1256,10 @@ export function apply(ctx, rawConfig) {
       await settings.update(UI_NS, { streaming });
       return { streaming };
     },
-    // ---- 一键更新（方案 D，2026-09-02）----
+    // ---- 一键更新（方案 D）----
     // 检查远程是否有新版本：git fetch（静默，失败=离线）→ 对比 HEAD 与 origin/main；
     // behind>0 = 可更新；ahead>0 = 本地领先（开发者本机忘了推送，提示先推送）。
-    // 2026-09-02 性能优化：git fetch/ls-remote 是网络操作（实测 4.7s，差网可超时 45s+30s），
+    //  性能优化：git fetch/ls-remote 是网络操作（实测 4.7s，差网可超时 45s+30s），
     // 总控页每次打开都会触发 → 结果内存缓存 60s；手动「检查更新」按钮传 {force:true} 绕过缓存实时复查。
     'updater.check': async (a) => {
       const now = Date.now();
@@ -1271,7 +1271,7 @@ export function apply(ctx, rawConfig) {
         if (!head.ok) { const v = { ok: true, offline: true, note: 'git 不可用（请先安装 git 后重试）', currentVersion }; updaterCheckCache = { t: t0, v }; return v; }
         const fetch = await runGit(['fetch', 'origin'], 45000);
         if (!fetch.ok) {
-          // 2026-09-03：失败原因落到 note（此前一律"网络或凭据不可用"，挂着代理软件时无从判断——
+          //：失败原因落到 note（此前一律"网络或凭据不可用"，挂着代理软件时无从判断——
           // git 不读系统代理；此处展示实际代理状态与 git 错误摘要，便于对症处理）
           const v = {
             ok: true, offline: true,
@@ -1336,12 +1336,12 @@ export function apply(ctx, rawConfig) {
     try {
       settingsCtx.settings.register(ARCHIVE_MODELS_NS, ArchiveModelsSchema, { base: { providers: [] } });
       settingsCtx.settings.register(DND_NS, DND_SCHEMA, { base: { enabled: false } });
-      // 2026-08-31 审计修复：archive-loop 命名空间改由 loop 模块自身注册（启动时读取才生效，
+      //  archive-loop 命名空间改由 loop 模块自身注册（启动时读取才生效，
       // 此前在此注册晚于 loop 启动读 settings → 降频开关重启后丢失）
       settingsCtx.settings.register(UI_NS, UI_SCHEMA, { base: { streaming: true } });
       settingsCtx.settings.register(UPDATER_NS, UPDATER_SCHEMA, { base: { lastNotifiedCommit: '' } });
       bootLine('[archive-control] settings ns=archive-models ready');
-      // 2026-08-30 迭代：报告目录选择能力（directoryPicker native/browse/unavailable），供 UI 工作区浏览按钮诊断
+      //  报告目录选择能力（directoryPicker native/browse/unavailable），供 UI 工作区浏览按钮诊断
       try {
         const dpCap = ctx.get('directoryPicker')?.capability?.();
         bootLine(`[archive-control] 目录选择能力: ${dpCap?.kind ?? 'unavailable'}`);
@@ -1351,7 +1351,7 @@ export function apply(ctx, rawConfig) {
     }
   });
 
-  // RPC 桥：经 connection 的专属通道 '/archive-control' 注册（2026-08-29 修复）。
+  // RPC 桥：经 connection 的专属通道 '/archive-control' 注册（ 修复）。
   // 说明：intercept('/api') 的共享通道已被 dsh-api-gateway 等占用（单一注册制，
   // 后注册者抛 "already has an interceptor" 被静默吞掉 → 浏览器端 /api/archive-control 404）。
   // 改用 connection.rpc.handle 挂独立前缀路由（浏览器 URL=/archive-control/<endpoint>），
@@ -1364,15 +1364,15 @@ export function apply(ctx, rawConfig) {
           const fn = OPS[op];
           if (!fn) return { ok: false, error: { code: 'internal', message: `unknown op: ${op}`, details: {} } };
           try {
-            // 2026-08-30 修复：connection 传入的 request.signal 透传给 op（directory.pick 的 native
+            //  修复：connection 传入的 request.signal 透传给 op（directory.pick 的 native
             // pick 契约签名 pick(signal) 必收 AbortSignal，否则内部 signal.aborted 直接 TypeError，
             // 目录选择对话框无法弹出）。
             return { ok: true, value: await fn(args, signal) };
           } catch (error) {
-            // 2026-08-30 审计修复：非 Error 异常（字符串/undefined）也能序列化传递，避免 toast 显示 undefined。
-            // 2026-08-30 修复：错误信封必须是对象 {code,message,details}——浏览器端 serverResponseSchema
+            //  非 Error 异常（字符串/undefined）也能序列化传递，避免 toast 显示 undefined。
+            //  修复：错误信封必须是对象 {code,message,details}——浏览器端 serverResponseSchema
             // 对 result 做 union 校验（error 为字符串时校验失败，toast 显示 zod JSON 而非真实错误）。
-            // 2026-09-03 阶段六：RPC 操作级报错统一转发 ledger（总控底部「报错」面板不漏用户操作错误）
+            //  RPC 操作级报错统一转发 ledger（总控底部「报错」面板不漏用户操作错误）
             try { ctx.get('archiveLedger')?.recordError?.({ source: 'rpc', module: 'control', level: 'error', message: String(error?.message ?? error), stack: error?.stack }); } catch { /* 转发失败不影响原错误返回 */ }
             return { ok: false, error: { code: 'internal', message: String(error?.message ?? error), details: {} } };
           }
@@ -1385,7 +1385,7 @@ export function apply(ctx, rawConfig) {
       logger.warn(`archive-control: RPC 注册失败：${error.message}`);
     }
   });
-  // 系统监控采样（每 5 分钟，cap 240 条）+ 自动备份（每 3 天，6h 检查一次）（2026-08-30）
+  // 系统监控采样（每 5 分钟，cap 240 条）+ 自动备份（每 3 天，6h 检查一次）
   const recordMetrics = () => {
     try {
       const entry = {

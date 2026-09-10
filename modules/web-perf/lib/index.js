@@ -1,4 +1,4 @@
-// dsh-archive-web-perf Host 半部（2026-09-02）：总控 Web 性能优化，三端（主包/Windows 分发包/手机分发包）同步生效。
+// dsh-archive-web-perf Host 半部：总控 Web 性能优化，三端（主包/Windows 分发包/手机分发包）同步生效。
 //  - /assets 前缀路由：gzip 压缩（Accept-Encoding 协商，内存缓存压缩结果）+ Cache-Control immutable 一年。
 //    assets 文件名带内容 hash（Vite 产物），内容不可变 → 永久缓存安全；浏览器刷新不再重新下载。
 //  - /archive-sw.js：Service Worker。对 /plugins/* 客户端模块 cache-first + 后台静默更新：
@@ -133,7 +133,7 @@ async function serveAssets(req, res, distRoot) {
 /** Service Worker：只处理同源 GET /plugins/*（客户端模块，no-cache + rev hash → 每次刷新都被重下）。
  *  cache-first：命中缓存直接返回，**不做后台静默更新**——模块 URL 带 rev hash（内容哈希），
  *  代码更新 → rev 变 → 缓存 miss → 自动重新下载，天然无陈旧缓存。
- *  2026-09-03 性能修复：原实现命中后 e.waitUntil(fetch) 后台重下全部模块——每次开页/刷新都会
+ *   性能修复：原实现命中后 e.waitUntil(fetch) 后台重下全部模块——每次开页/刷新都会
  *  向服务端并发发起 ~45 个模块请求，且 waitUntil 在页面关闭后仍在 SW 中继续；反复开/关页面时
  *  后台请求累积淹没服务端（手机实测：某次刷新突然卡 1 分钟+）。rev hash 已保证新鲜度，删除后台更新。
  *  其余请求（/、/api、/describe-image 等）一律直通，不缓存动态数据。 */

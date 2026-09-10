@@ -1,5 +1,5 @@
 // 验证插件 apply：persona systemPrompt context 注册 + 注入文本 + 工具注册
-// 2026-09-01：断言改为结构校验（不依赖真实 persona.json 内容）——真实数据是自进化产物
+//：断言改为结构校验（不依赖真实 persona.json 内容）——真实数据是自进化产物
 // （version 会随采纳递增、identity 分区可能为空），写死 version="1"/identity 文本会误报 FAIL。
 const pluginUrl = 'file:///C:/DSH-ARCHIVE/dsh/node_modules/dsh-archive-persona/lib/index.js';
 const mod = await import(pluginUrl);

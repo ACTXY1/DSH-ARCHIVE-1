@@ -21,7 +21,12 @@ DSH-ARCHIVE 是一个基于 DSH 框架、可长时间自主运行的智能体系
 ### Windows
 
 1. 前置：Node.js ≥ 22.5、pnpm（首次安装脚本会在缺失时自动处理）。**无需单独安装 DSH**——本项目自带运行所需组件，与其它 DSH 环境相互独立。向量模型运行时 [ollama](https://ollama.com)：首次安装脚本会自动处理——本机已运行 ollama 则直接复用并补拉嵌入模型；否则自动下载捆绑版（约 1.3GB）并在首次启动时自动拉取嵌入模型 `shaw/dmeta-embedding-zh`（下载失败不影响其余步骤，可按提示稍后手动补齐）。
-2. 下载代码：`git clone https://github.com/ACTXY1/DSH-ARCHIVE-1.git`（或页面 Code → Download ZIP）。两种方式都能安装运行；区别在于 Download ZIP 不含版本库，《一键更新.cmd》《一键回滚.cmd》不可用（会提示缺少仓库元数据），需要一键更新时请用 clone 方式。
+2. 下载代码：**推荐用 `git clone https://github.com/ACTXY1/DSH-ARCHIVE-1.git`**。
+   页面 Code → Download ZIP 也能正常安装运行，但压缩包不含版本库（没有 `.git`），《一键更新.cmd》《一键回滚.cmd》用不了（会提示缺少仓库元数据）——这两个按钮要靠版本库比对与回退。想以后能一键更新，请用 clone 方式。
+
+   已经用压缩包装好的，更新代码用这两种办法之一：
+   - 省事：重新下载最新压缩包，解压后覆盖项目里的代码文件；`dsh\data`（记忆、会话、密钥）、`ollama`、`backups` 这三个目录不覆盖也不受影响，覆盖完重新双击《启动DSH-ARCHIVE.cmd》。
+   - 一次配好：机器上装好 Git，在项目根目录依次执行 `git init`、`git remote add origin https://github.com/ACTXY1/DSH-ARCHIVE-1.git`、`git fetch origin`、`git checkout -f origin/main`，之后《一键更新.cmd》就能用了。最后一步会覆盖代码文件（`dsh\data`、`ollama`、`backups` 不在版本库里，不受影响）；若你手动改过代码，请先自行备份。
 3. 首次安装：双击根目录《首次安装或移动项目位置点我.cmd》（检测/提示前置环境、安装依赖、同步插件并建立运行入口）。首次安装需要联网一次，用于下载项目依赖。
 4. 配置模型密钥：启动后浏览器进入控制台 → 模型页填写 API Key（或配置自定义提供商）；未配置时服务可启动，AI 相关功能会提示缺少凭据。
 5. 启动：《启动DSH-ARCHIVE.cmd》，访问 http://127.0.0.1:3081。

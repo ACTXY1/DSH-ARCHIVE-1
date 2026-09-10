@@ -1,5 +1,5 @@
 /**
- * dsh-archive-schedule —— DSH-ARCHIVE 定时任务（Cordis 插件，阶段五）。
+ * dsh-archive-schedule —— DSH-ARCHIVE 定时任务（Cordis 插件）。
  *
  * 需求："和 AI 说自己几点钟要干什么，AI 记住并到时间发消息或按要求干活。"
  *
@@ -8,7 +8,7 @@
  * - 类型：one-time（绝对时间）/ daily（每天 HH:mm）/ interval（每 N 分钟）。
  * - 执行：
  *   - type=message → ctx.notify.send(scope='chat')（用户要求的提醒：主动消息通道 + 总会话对话流送达；
- *     2026-09-03 起"停机错过"等系统状态提示走 panel 级，只进通知流水不进对话）。
+ *      起"停机错过"等系统状态提示走 panel 级，只进通知流水不进对话）。
  *   - type=work    → 生成待办记忆（source='task-due'）+ 触发自循环（ctx.loop.trigger）。
  * - 过期处理：进程未运行时到期的任务标记 missed（重启后提示）。
  * - 工具：schedule_create / schedule_list / schedule_cancel。
@@ -27,7 +27,7 @@ const DEFAULTS = {
   dbPath: join(process.cwd(), 'data', 'tasks.db'),
   checkMs: 30000,
   missedGraceMs: 600000, // 停机错过宽限：停机期间到期超过该时长 → 标记 missed 不执行；宽限内补执行
-  cleanupRetentionDays: 7, // 已完成/取消/错过任务的保留天数（2026-08-30：防数据无限增长；pending 永不清理）
+  cleanupRetentionDays: 7, // 已完成/取消/错过任务的保留天数（防数据无限增长；pending 永不清理）
 };
 
 function normalizeConfig(raw = {}) {
@@ -53,7 +53,7 @@ export function apply(ctx, rawConfig) {
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const db = new DatabaseSync(config.dbPath);
   db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA wal_autocheckpoint = 500'); // 2026-08-30：WAL 更频繁 checkpoint，防增长/强杀落后
+  db.exec('PRAGMA wal_autocheckpoint = 500'); //：WAL 更频繁 checkpoint，防增长/强杀落后
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
@@ -100,13 +100,13 @@ export function apply(ctx, rawConfig) {
       const task = String(input.task ?? '').trim();
       if (!task) throw new Error('schedule.create: task 必填');
       const type = input.type === 'work' ? 'work' : 'message';
-      // 2026-08-31 审计修复：非法 schedule 枚举不再静默回退 one-time（曾致无 at 时下一 tick 立即触发）
+      //  非法 schedule 枚举不再静默回退 one-time（曾致无 at 时下一 tick 立即触发）
       if (!['one-time', 'daily', 'interval'].includes(input.schedule)) throw new Error(`schedule.create: 非法 schedule：${input.schedule}`);
       const schedule = input.schedule;
       if (schedule === 'interval' && !(Number.isFinite(input.intervalMinutes) && input.intervalMinutes >= 1)) {
         throw new Error('schedule.create: interval 类型需要 intervalMinutes ≥ 1');
       }
-      // 2026-08-31 审计修复：one-time/daily 的 at 必须可解析（NaN/垃圾串会落成幽灵任务永不到期）
+      //  one-time/daily 的 at 必须可解析（NaN/垃圾串会落成幽灵任务永不到期）
       if (schedule !== 'interval' && input.at != null && input.at !== '') {
         const ts = computeDueAt({ schedule, dueAt: input.at, intervalMinutes: null });
         if (!Number.isFinite(ts)) throw new Error(`schedule.create: 无效的时间：${input.at}`);
@@ -120,13 +120,13 @@ export function apply(ctx, rawConfig) {
     },
 
     list(limit = 50) {
-      // 2026-08-31 审计修复：钳制 limit（负数 → SQLite LIMIT -1 返回全部任务）
+      //  钳制 limit（负数 → SQLite LIMIT -1 返回全部任务）
       const n = Math.max(1, Math.min(200, Number.isFinite(limit) ? Math.floor(limit) : 50));
       return db.prepare('SELECT * FROM tasks ORDER BY due_at ASC LIMIT ?').all(n).map(hydrateTask);
     },
 
     cancel(id) {
-      // 2026-08-30：取消任务时解除其待办记忆的保护（任务不再需要，待办可被遗忘/归档/手动删除）
+      //：取消任务时解除其待办记忆的保护（任务不再需要，待办可被遗忘/归档/手动删除）
       try {
         const row = db.prepare('SELECT task_text FROM tasks WHERE id = ?').get(id);
         if (row?.task_text) unprotectTaskMemories(ctx, row.task_text);
@@ -141,18 +141,18 @@ export function apply(ctx, rawConfig) {
       return { byStatus: by };
     },
 
-    /** 清理超期历史任务（2026-08-30）：fired 按 fired_at、cancelled/missed/failed 按 created_at 超过保留期删除；pending 永不清理。 */
+    /** 清理超期历史任务：fired 按 fired_at、cancelled/missed/failed 按 created_at 超过保留期删除；pending 永不清理。 */
     cleanup() {
       const cutoff = Date.now() - config.cleanupRetentionDays * 86400000;
       const r1 = db.prepare("DELETE FROM tasks WHERE status = 'fired' AND fired_at IS NOT NULL AND fired_at < ?").run(cutoff);
-      // 2026-08-31 审计修复：纳入 failed（fire 抛错置 failed 的孤儿记录此前永不清理）
+      //  纳入 failed（fire 抛错置 failed 的孤儿记录此前永不清理）
       const r2 = db.prepare("DELETE FROM tasks WHERE status IN ('cancelled','missed','failed') AND created_at < ?").run(cutoff);
       const removed = r1.changes + r2.changes;
       if (removed > 0) logger.info(`archive-schedule: 清理历史任务 ${removed} 条（保留 ${config.cleanupRetentionDays} 天）`);
       return { removed };
     },
 
-    /** 强制 WAL checkpoint（2026-08-30：定时 + 备份前调用）。 */
+    /** 强制 WAL checkpoint（定时 + 备份前调用）。 */
     checkpoint() {
       try {
         const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
@@ -163,7 +163,7 @@ export function apply(ctx, rawConfig) {
     },
 
     close() {
-      // 2026-08-30 修复：关闭置位 disposed，防止检查 tick 在 db.close() 后触发
+      //  修复：关闭置位 disposed，防止检查 tick 在 db.close() 后触发
       // "database is not open" 未捕获异常（system.shutdown 关闭流程中实测撞上 → 退出码 1）
       disposed = true;
       try { db.close(); } catch { /* ignore */ }
@@ -174,15 +174,15 @@ export function apply(ctx, rawConfig) {
   /** 到期任务执行。 */
   function fire(task) {
     const now = Date.now();
-    // 2026-08-31 睡眠期打断：任何定时任务触发都先唤醒智能体（asleep → 强制清醒间隔）。
+    //  睡眠期打断：任何定时任务触发都先唤醒智能体（asleep → 强制清醒间隔）。
     // schedule 已 inject loop（单向依赖，无循环引用；loop 侧读 schedule 走 ctx.get 可选访问）
     try { ctx.loop.wake?.('task'); } catch { /* 唤醒失败不阻断任务执行 */ }
     if (task.type === 'message') {
       try {
-        // 2026-09-03 分级：用户显式要求的定时提醒 → scope='chat'（可注入总会话对话流，由 control 在非对话/非静默
+        //  分级：用户显式要求的定时提醒 → scope='chat'（可注入总会话对话流，由 control 在非对话/非静默
         // 时机送达）；停机错过等系统状态提示默认 panel（只进通知流水与总控「通知」页，不进对话）。
         const res = ctx.notify.send({ content: `⏰ 定时任务提醒：${task.task}`, source: 'schedule', scope: 'chat' });
-        // 2026-08-30 修复：notify 全局限频会静默吞掉提醒（任务却标记 fired）→
+        //  修复：notify 全局限频会静默吞掉提醒（任务却标记 fired）→
         // 限频窗口内推迟重试、保持 pending，保证用户显式要求的提醒最终送达
         if (res && res.limited) {
           db.prepare('UPDATE tasks SET due_at = ? WHERE id = ?').run(now + 5000, task.id);
@@ -190,7 +190,7 @@ export function apply(ctx, rawConfig) {
           return;
         }
       } catch (error) {
-        // 2026-08-31 审计修复：发送异常（写盘失败等）与限频同处理——保持 pending 推迟重试，
+        //  发送异常（写盘失败等）与限频同处理——保持 pending 推迟重试，
         // 绝不在未送达时标记 fired（曾致提醒永久丢失）
         logger.warn(`archive-schedule: 通知发送失败，5s 后重试（${task.id}）：${error.message}`);
         db.prepare('UPDATE tasks SET due_at = ? WHERE id = ?').run(now + 5000, task.id);
@@ -198,17 +198,17 @@ export function apply(ctx, rawConfig) {
       }
     } else {
       // work：生成待办记忆 + 触发自循环思考
-      // 2026-08-30：新提醒前先解除同任务旧待办记忆的保护（新提醒取代旧）；新待办 protected=true 防遗忘。
+      //：新提醒前先解除同任务旧待办记忆的保护（新提醒取代旧）；新待办 protected=true 防遗忘。
       unprotectTaskMemories(ctx, task.task);
       try {
-        // 2026-08-30 审计修复：memory.write 异步（含 embedding），.catch 兜底防 unhandled rejection 崩溃
+        //  memory.write 异步（含 embedding），.catch 兜底防 unhandled rejection 崩溃
         ctx.memory.write({ content: `<task-due time="${ctx.virtualClock.format()}">${task.task}</task-due>`, kind: 'episodic', source: 'task-due', importance: 0.7, tags: ['task', 'todo'], protected: true })
           .catch((error) => logger.warn(`archive-schedule: 待办记忆写入失败：${error?.message ?? error}`));
       } catch { /* ignore */ }
       try { ctx.loop.trigger('task-due'); } catch { /* ignore */ }
     }
     // 重复任务：重排下次
-    // 2026-08-30 修复：hydrateTask 输出 camelCase（intervalMinutes/dueAt），此处曾用 snake_case
+    //  修复：hydrateTask 输出 camelCase（intervalMinutes/dueAt），此处曾用 snake_case
     // （task.interval_minutes/task.due_at=undefined）→ 重排到期=now → interval/daily 每 tick 疯狂重触发。
     if (task.schedule === 'interval') {
       db.prepare('UPDATE tasks SET due_at = ?, status = ?, fired_at = ?, missed_note = NULL WHERE id = ?')
@@ -227,10 +227,10 @@ export function apply(ctx, rawConfig) {
   let lastCheckpointAt = 0;
   let disposed = false;
   ctx.timer.setInterval(() => {
-    if (disposed) return; // 2026-08-30：关闭后不再执行检查（防止 db closed 未捕获异常）
+    if (disposed) return; //：关闭后不再执行检查（防止 db closed 未捕获异常）
     try {
       const now = Date.now();
-      // WAL checkpoint（每 10 分钟；2026-08-30）
+      // WAL checkpoint（每 10 分钟；）
       if (now - lastCheckpointAt >= 10 * 60000) {
         lastCheckpointAt = now;
         try { api.checkpoint(); } catch { /* 失败不阻断 */ }
@@ -344,10 +344,10 @@ function hydrateTask(row) {
   };
 }
 
-/** 解除指定任务文本对应的待办记忆保护（2026-08-30：任务取消/新提醒取代旧时调用）。
- * 审计修复（2026-08-30）：此前定义为模块顶层函数却引用 apply 形参 ctx → 每次调用抛 ReferenceError，
+/** 解除指定任务文本对应的待办记忆保护（任务取消/新提醒取代旧时调用）。
+ * 此前定义为模块顶层函数却引用 apply 形参 ctx → 每次调用抛 ReferenceError，
  * work 型任务整链路失效；改为显式接收 ctx。
- * 2026-08-31 审计修复：翻页遍历 + 精确匹配——高频对话记忆会把旧 task-due 挤出 200 窗口（保护残留），
+ *  翻页遍历 + 精确匹配——高频对话记忆会把旧 task-due 挤出 200 窗口（保护残留），
  * 子串匹配会误伤不同任务（"提醒喝水"与"提醒喝水并吃药"互相解除）。 */
 function unprotectTaskMemories(ctx, taskText) {
   try {

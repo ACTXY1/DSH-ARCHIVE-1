@@ -1,7 +1,7 @@
 /**
  * dsh-archive-consistency —— 人格一致性校验器（动态轨迹校验器）。
  *
- * 需求（用户 2026-08-31）：对比"人格发展轨迹"，防止 AI 角色偏离过大；满足功能前提下
+ * 需求（用户 ）：对比"人格发展轨迹"，防止 AI 角色偏离过大；满足功能前提下
  * 尽量减少额外消耗的时间；总控界面必须有开关。三个串行模块：
  *
  *  1. 轨迹编码器（离线维护）：维护滑动窗口人格矩阵——最近 100 轮交互 + 最近 5 条已审批
@@ -14,7 +14,7 @@
  *  3. 进化溯源验证器（审批协同）：审批通过 → 建议向量作"航点"入轨 + 动态抬高阈值 β +
  *     把最近 3 条被驳回输出用新人格重写（人格倒叙修正，异步低优先级）。
  *
- * 拦截时机说明（2026-08-31 查证 dsh-agent-loop 源码）：DSH 原生流程无"输出前"钩子，
+ * 拦截时机说明（ 查证 dsh-agent-loop 源码）：DSH 原生流程无"输出前"钩子，
  * 回复由 session.append("assistant/message") 流式结束后直接落库（dsh-session 亦无消息
  * 替换/删除 API）。故检测点在落库事件上异步执行（本地 ollama embed ~100ms），严重档以
  * "存档 + 追加拦截说明 + 重生成替换回复"实现拒绝语义。
@@ -180,7 +180,7 @@ export function apply(ctx, rawConfig) {
         if (!Array.isArray(base.revisions)) base.revisions = [];
         if (!Array.isArray(base.corrections)) base.corrections = [];
         if (typeof base.seqMap !== 'object' || base.seqMap === null) base.seqMap = {};
-        // 2026-08-31 审计修复：stats 与默认逐键合并（文件里 stats 为 {} 时不再产生 NaN 计数）
+        //  stats 与默认逐键合并（文件里 stats 为 {} 时不再产生 NaN 计数）
         if (typeof base.stats !== 'object' || base.stats === null) base.stats = {};
         for (const k of Object.keys(baseState().stats)) if (typeof base.stats[k] !== 'number') base.stats[k] = 0;
         // 丢弃 vec 非数组的轨迹/航点条目（形状损坏防 euclid TypeError 致检测静默失败）
@@ -440,7 +440,7 @@ export function apply(ctx, rawConfig) {
       const direction = st.waypoints.length > 0 ? st.waypoints[st.waypoints.length - 1].content : '保持与近期人格轨迹一致的稳定风格';
       const rewritten = await callLlmWithTimeout(regenPrompt(direction, original), original);
       if (!rewritten) throw new Error('重生成返回空');
-      // 2026-08-31 审计修复：二次检测 embed 失败（ollama 瞬时超时）不应丢弃已生成的重写回复——
+      //  二次检测 embed 失败（ollama 瞬时超时）不应丢弃已生成的重写回复——
       // 独立容错：embed 失败按"跳过二次检测"处理，直接追加重生成回复
       let g2 = null;
       try {
@@ -538,7 +538,7 @@ export function apply(ctx, rawConfig) {
       if (!evolution || typeof evolution.view !== 'function') return { skipped: true, reason: 'evolution 服务不可用' };
       const view = await evolution.view(50);
       const records = Array.isArray(view?.records) ? view.records : [];
-      // 2026-08-31 审计修复：①匹配 approve 与 auto-apply（潜意识自动微调采纳）；②去掉 reverse()
+      //  ①匹配 approve 与 auto-apply（潜意识自动微调采纳）；②去掉 reverse()
       // ——records 为 new→old，find 直接取最新匹配记录
       const rec = records.find((r) => (r?.type === 'approve' || r?.type === 'auto-apply') && (r?.candidateId === candidateId || !candidateId));
       const candidate = rec?.candidate;
@@ -620,14 +620,14 @@ export function apply(ctx, rawConfig) {
     },
     /** 渲染层用：会话消息 seq → 判定结果（suspicious 附修订版全文，blocked 标记）。 */
     revisionsMap: () => ({ map: { ...st.seqMap }, alpha: st.alpha, beta: st.beta }),
-    /** 2026-08-31 潜意识系统：最近 N 个轨迹点的文本摘要（供"自洽置信度"评估注入提示词）。 */
+    /**  潜意识系统：最近 N 个轨迹点的文本摘要（供"自洽置信度"评估注入提示词）。 */
     trajectoryText: (n = 5) => {
       const k = Math.max(1, Math.min(30, Number(n) || 5));
       return st.turns.slice(-k).map((t) => t.text).filter(Boolean);
     },
     configure: (patch = {}) => {
       if (typeof patch.enabled === 'boolean') { st.enabled = patch.enabled; markDirty(); }
-      // 2026-08-31 审计修复：与 normalizeConfig 一致用 Number.isFinite（此前 Infinity 可永久禁用拦截）
+      //  与 normalizeConfig 一致用 Number.isFinite（此前 Infinity 可永久禁用拦截）
       if (typeof patch.alpha === 'number' && Number.isFinite(patch.alpha) && patch.alpha > 0) { st.alpha = patch.alpha; st.calibrated = true; markDirty(); }
       if (typeof patch.beta === 'number' && Number.isFinite(patch.beta) && patch.beta > 0) { st.beta = patch.beta; st.calibrated = true; markDirty(); }
       if (patch.resetCalibration === true) {

@@ -8,7 +8,7 @@
 dsh/data/
 dsh/logs/
 dsh/backups/
-# 2026-09-10 独立化：项目自带 DSH 家目录（profiles/junction/agent-presets/dsh-tools 回退副本）
+#  独立化：项目自带 DSH 家目录（profiles/junction/agent-presets/dsh-tools 回退副本）
 # 属运行时产物，绝不进仓库、不进分发包、不参与一键更新。
 # 位置：项目根 .dsh-home（与 dsh 平级）——刻意不放在 dsh 内部，避免"home 在 dsh 里、
 # 里面又有指向 dsh 的链接"形成祖先环（整目录复制会递归/失败）。旧路径 dsh/home 一并忽略。

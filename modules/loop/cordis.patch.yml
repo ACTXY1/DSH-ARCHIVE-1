@@ -16,10 +16,10 @@
         recallRecent: 5
         recallRelated: 5
         injectOrder: 900
-        # 2026-09-01：用户主动发消息后暂停时间驱动循环（fallback/startup/hour）的时长；
+        #：用户主动发消息后暂停时间驱动循环（fallback/startup/hour）的时长；
         # 窗口内只运行对话循环（pre-turn），运行中的时间驱动循环被立即中止并清理记录（防并行决策割裂对话）
-        # 2026-09-03 记忆错乱修复：30s→180s（对话回合结束后 60s 内仍会触发 proactive 重复/串线发言）
+        #  记忆错乱修复：30s→180s（对话回合结束后 60s 内仍会触发 proactive 重复/串线发言）
         quietAfterUserMs: 180000
-        # 2026-09-01-4：单次决策 token 预算（deepseek-v4-flash 推理模型 reasoning 会大量占用，
+        #：单次决策 token 预算（deepseek-v4-flash 推理模型 reasoning 会大量占用，
         # 过小致正文截断 → "LLM 未返回文本" → 循环失败风暴；总控「思维循环」页可运行时调整）
         maxTokens: 10000

@@ -1,4 +1,4 @@
-﻿# 确保 @deepseek-ai/dsh-tools 模块实例一致（2026-09-10 独立化版）。
+﻿# 确保 @deepseek-ai/dsh-tools 模块实例一致（ 独立化版）。
 # 背景：插件 import defineTool 与 loader 的 tools 服务必须使用同一个物理模块实例
 # （TOOL_RUNTIME_SCHEDULER 是 Symbol，两个物理副本 = 两个 Symbol，agent 工具调用会报
 # "reading 'prepare' of undefined"）。

@@ -1,6 +1,6 @@
 // 总会话注入验证：notify 事件 → control 把 assistant/message 追加进 session-main
-// （2026-08-29：总会话改为异步恢复/创建，stub 提供 sessionPersistence 并等待就绪）
-// 2026-09-01：PROJECT_ROOT 改为 dataRoot 上级的上级（修复备份根错位回归）——stub 传 dataRoot
+// （总会话改为异步恢复/创建，stub 提供 sessionPersistence 并等待就绪）
+//：PROJECT_ROOT 改为 dataRoot 上级的上级（修复备份根错位回归）——stub 传 dataRoot
 // 为项目结构（dsh/data 在 tmp 下），MAIN_CWD=tmp（项目根语义）；cwd 断言随之改为 tmp。
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,10 +11,10 @@ const mod = await import('file:///C:/DSH-ARCHIVE/dsh/node_modules/dsh-archive-co
 
 const appended = [];
 const flushCalls = [];
-const capturedTimeouts = []; // 2026-09-03：捕获挂起队列的自再挂 setTimeout，供测试驱动排空
+const capturedTimeouts = []; //：捕获挂起队列的自再挂 setTimeout，供测试驱动排空
 let handler = null;
 let createdSession = null;
-// 2026-09-03：loop 会话态可切换——对话中(conversing) chat 级记录须挂起，回合结束(idle)再按序送达
+//：loop 会话态可切换——对话中(conversing) chat 级记录须挂起，回合结束(idle)再按序送达
 let loopMode = 'idle';
 let loopQuietLeftMs = 0;
 const persistenceStub = {
@@ -26,11 +26,11 @@ const ctx = {
   on: (name, fn) => { if (name === 'archive/notify-sent') handler = fn; },
   provide: () => {},
   timer: { setInterval: () => 1, setTimeout: (fn) => { capturedTimeouts.push(fn); return capturedTimeouts.length; } },
-  // 2026-08-30 修复：stub 缺 parallel —— control 的 inject 回调经 ctx.parallel 切回主 ctx，缺失会抛 TypeError 致断言全部不跑
+  //  修复：stub 缺 parallel —— control 的 inject 回调经 ctx.parallel 切回主 ctx，缺失会抛 TypeError 致断言全部不跑
   parallel: (events, fn) => { fn(); return Promise.resolve(); },
   inject: (services, cb) => cb({
     sessionPersistence: persistenceStub,
-    // 2026-09-01：control 还 inject settings/connection/workspaceRegistry/sessionTitle —— stub 补齐避免启动噪音
+    //：control 还 inject settings/connection/workspaceRegistry/sessionTitle —— stub 补齐避免启动噪音
     settings: { register: () => ({}), get: () => ({}), update: async () => {} },
     connection: { rpc: { handle: () => {} } },
     workspaceRegistry: { list: async () => [], detachSession: async () => {}, attachSession: async () => {} },
@@ -63,12 +63,12 @@ function check(name, cond, detail = '') {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 模拟 notify 发送事件（总会话为异步初始化，需等待微任务完成）
-// 2026-09-03 分级：仅 scope='chat' 记录注入对话流；scope='panel'（默认）只进通知流水，绝不注入
+//  分级：仅 scope='chat' 记录注入对话流；scope='panel'（默认）只进通知流水，绝不注入
 await sleep(20);
 handler({ record: { id: 'n1', content: '⏰ 测试：主动消息注入总会话', source: 'schedule', at: 12345, scope: 'chat' } });
 await sleep(20);
 
-// 2026-09-01-2：MAIN_CWD=resolve(dataRoot,'..')（=tmp/dsh，主会话工作目录=profile 目录，
+//：MAIN_CWD=resolve(dataRoot,'..')（=tmp/dsh，主会话工作目录=profile 目录，
 // 与持久化主会话 cwd 语义一致）；resolve() 在 Windows 返回反斜杠，断言前归一化为正斜杠比较
 check('总会话创建（session-main + cwd=profile 目录）', createdSession?.id === 'session-main' && String(createdSession?.opts?.meta?.cwd ?? '').replace(/\\/g, '/') === join(tmp, 'dsh').replace(/\\/g, '/'));
 check('assistant/message 事件追加', appended.length === 1 && appended[0].type === 'assistant/message');
@@ -90,7 +90,7 @@ handler({ record: { id: 'old', content: '旧格式无 scope 记录', source: 'lo
 await sleep(10);
 check('无 scope 记录按 panel 处理（不注入）', appended.length === 1);
 
-// 2026-09-03 送达时机门控：对话回合进行中（conversing）到达的 chat 级记录先挂起，回合结束(idle)后按序送达
+//  送达时机门控：对话回合进行中（conversing）到达的 chat 级记录先挂起，回合结束(idle)后按序送达
 // （防定时提醒/主动消息插进 AI 正在回复的对话中间 → 割裂）
 const appendedBeforeHold = appended.length;
 const timeoutsBeforeHold = capturedTimeouts.length;

@@ -1,4 +1,4 @@
-// 阶段三端到端验证：真实 persona.json 种入基础人格 → 注入渲染 → evolution 增补留档 → 回滚接口
+// 端到端验证：真实 persona.json 种入基础人格 → 注入渲染 → evolution 增补留档 → 回滚接口
 import { PersonaStore } from '../lib/persona-store.js';
 
 const store = new PersonaStore({ path: 'C:/DSH-ARCHIVE/dsh/data/persona.json' });
