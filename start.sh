@@ -38,7 +38,7 @@ echo '  DSH-ARCHIVE 手机版启动'
 echo '============================================'
 
 # ---------------- 1. 环境检查（2026-09-11 独立化：项目自带引擎 + 项目 home） ----------------
-PROJ_HOME="$INSTALL_DIR/dsh/home"
+PROJ_HOME="$INSTALL_DIR/.dsh-home"
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 if [ ! -f "$ENGINE_BIN" ]; then
   die '未找到项目自带 dsh 引擎（dsh/node_modules/@deepseek-ai/dsh）——请先运行 bash install.sh 完成依赖安装'

@@ -36,7 +36,7 @@ else
 fi
 
 # 3. 项目 home 与 profile 符号链接
-PROJ_HOME="$INSTALL_DIR/dsh/home"
+PROJ_HOME="$INSTALL_DIR/.dsh-home"
 if [ -L "$PROJ_HOME/profiles/archive" ] && [ "$(readlink -f "$PROJ_HOME/profiles/archive")" = "$INSTALL_DIR/dsh" ]; then
   ok '项目内 profile 符号链接正确'
 else

@@ -9,7 +9,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent   # <项目根>
 $pkg  = Join-Path $root 'dsh\node_modules\@deepseek-ai\dsh-tools'
-$homeDir = Join-Path $root 'dsh\home'
+$homeDir = Join-Path $root '.dsh-home'
 $link = Join-Path $homeDir 'profiles\node_modules\@deepseek-ai\dsh-tools'
 
 if (-not (Test-Path (Join-Path $pkg 'package.json'))) {

@@ -163,7 +163,23 @@ fi
 export ARC_DIR="$INSTALL_DIR"
 PERL_SCRIPT='
   if ($ARGV =~ /\.json$/i) { s{\\\\}{\x{E000}}g }
-  s{[A-Za-z]:(?!//)[\\/][^":\r\n<>|`]*DSH-ARCHIVE}{$ENV{ARC_DIR}}g;
+  s{(?<![A-Za-z0-9])([A-Za-z]:[\\/][^":\r\n<>|`]*)}{
+    my $t = $1; my $tt = $t; $tt =~ tr{\\}{/};
+    my $n = lc($tt);
+    my $root = $ENV{ARC_DIR};
+    my $rn = lc($root); $rn =~ tr{\\}{/}; $rn =~ s{/+$}{};
+    if ($n eq $rn || index($n, $rn . "/") == 0) { $t }
+    elsif ((my $i = index($n, "/dsh/data")) >= 0) { $root . substr($tt, $i) }
+    else {
+      my @p = split m{/}, $tt;
+      my $idx = -1;
+      for my $k (0 .. $#p) { $idx = $k if lc($p[$k]) =~ /^dsh-archive/ }
+      if ($idx >= 0 && $idx < $#p) {
+        my $rest = join("/", @p[$idx + 1 .. $#p]);
+        if (lc($rest) =~ m{^(dsh|modules|presets|scripts|assets|ollama|backups|node_modules|readme\.md|version|start|stop|update|install|fix|rollback|verify|sync|tray|push)(\.|/|$)}) { $root . "/" . $rest } else { $t }
+      } else { $t }
+    }
+  }ge;
   if ($ARGV =~ /\.json$/i) { s{\x{E000}}{\\\\}g }
   s{file:////+}{file:///}g;
 '
@@ -188,7 +204,7 @@ else
 fi
 
 # ---------------- 9. 模块同步 + dsh-tools 链接（install.sh 6b/6c 段；2026-09-11 独立化） ----------------
-PROJ_HOME="$INSTALL_DIR/dsh/home"
+PROJ_HOME="$INSTALL_DIR/.dsh-home"
 ENGINE_BIN="$INSTALL_DIR/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 export DSH_HOME="$PROJ_HOME"
 mkdir -p "$INSTALL_DIR/dsh/node_modules"

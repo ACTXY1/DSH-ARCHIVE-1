@@ -74,7 +74,7 @@ Write-Host '  DSH-ARCHIVE one-click start'
 Write-Host '=============================='
 
 # 1) 环境检查（2026-09-11 独立化）：使用项目自带的 dsh 引擎，不再依赖全局 dsh 命令
-$projHome  = Join-Path $dshDir 'home'
+$projHome  = Join-Path $root '.dsh-home'
 $engineBin = Join-Path $dshDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
 if (-not (Test-Path $engineBin)) {
   Write-Host '[start] ERROR: 未找到项目自带 dsh 引擎（node_modules\@deepseek-ai\dsh）' -ForegroundColor Red
@@ -83,7 +83,7 @@ if (-not (Test-Path $engineBin)) {
 }
 
 # 1.5) 项目内 profile 入口（2026-09-11 独立化）：入口一律位于项目 home 内
-#      （<项目>\dsh\home\profiles\archive -> <项目>\dsh），不再使用 ~/.dsh——也就不存在
+#      （<项目>\.dsh-home\profiles\archive -> <项目>\dsh），不再使用 ~/.dsh——也就不存在
 #      "多副本共用全局入口被互相覆盖"的问题；缺失/指向错误时本脚本直接创建或修正。
 #      另做数据路径自检：cordis.patch.yml 的数据路径必须全部落在本副本 dsh\data，
 #      否则（git 检出/移动未归一化）自动运行一次 fix-project-location -NoPrompt 修复；
@@ -120,11 +120,23 @@ function Test-DirHealable([string]$dirPath) {
   return (-not (Test-DataPresent $dirPath))
 }
 $junction = Join-Path $projHome 'profiles\archive'
+# 旧版 home（dsh\home）遗留清理：其中含指向 dsh 的链接，会让"整目录复制"递归/失败。
+$legacyHome = Join-Path $dshDir 'home'
+if (Test-Path -LiteralPath $legacyHome) {
+  & cmd /c rmdir /s /q "`"$legacyHome`"" 2>$null | Out-Null
+  if (-not (Test-Path -LiteralPath $legacyHome)) { Write-Host '[start] 已清理旧版 home（dsh\home）' -ForegroundColor Yellow }
+}
 if (Test-Path $junction) {
   $jit = Get-Item $junction -Force -ErrorAction SilentlyContinue
   if (($null -eq $jit) -or ($jit.LinkType -ne 'Junction')) {
-    Write-Host "[start] ERROR: $junction 已存在但不是 junction（真实目录），请手动处理后重试。" -ForegroundColor Red
-    exit 1
+    # 2026-09-11：文件夹被"复制"后，链接可能变成真实目录（复制工具解引用）——home 属运行时可再生
+    # 产物（不含用户数据），这里直接移除并重建为链接，实现复制善后自愈。
+    Write-Host "[start] profile 入口是真实目录（疑似复制所致），自动重建为链接..." -ForegroundColor Yellow
+    & cmd /c rmdir /s /q "`"$junction`"" 2>$null | Out-Null
+    if (Test-Path $junction) { Write-Host "[start] ERROR: 无法重建 profile 入口：$junction" -ForegroundColor Red; exit 1 }
+    New-Item -ItemType Directory -Force -Path (Split-Path $junction -Parent) | Out-Null
+    New-Item -ItemType Junction -Path $junction -Target $dshDir | Out-Null
+    Write-Host "[start] 已重建项目内 profile 入口：$junction -> $dshDir" -ForegroundColor Green
   }
 } else {
   New-Item -ItemType Directory -Force -Path (Split-Path $junction -Parent) | Out-Null
@@ -355,7 +367,7 @@ if (Test-Path $log) {
 # Log encoding (2026-08-30 fix): redirect via cmd /c - cmd writes bytes as-is, so dsh
 #       UTF-8 output lands verbatim; PS 5.1 *>> would transcode to ANSI/GBK and garble it.
 # 2026-09-11 独立化：启动【项目自带引擎】（node <项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js），
-#       并通过 cmd set 只在本次子进程内注入 DSH_HOME=<项目>\dsh\home —— 全局 dsh 与 ~/.dsh
+#       并通过 cmd set 只在本次子进程内注入 DSH_HOME=<项目>\.dsh-home —— 全局 dsh 与 ~/.dsh
 #       的任意改动都不参与本项目运行（原 DSH 升级/卸载/家目录清理均无影响）。
 Write-Host "[start] starting control UI at http://127.0.0.1:$port (log: $log)"
 $cmd = "set `"DSH_HOME=$projHome`" && node `"$engineBin`" --profile archive --port $port --no-open >> `"$log`" 2>&1"

@@ -6,7 +6,7 @@
 #          0. 校验项目根
 #          1. 环境检测：OS / PowerShell / 网络 / Node.js / npm / pnpm / 项目自带 dsh 引擎
 #          2. 前置自动安装：Node.js（winget）、pnpm、项目 dsh 引擎依赖（pnpm install）；项目 home 初始化
-#          3. 项目内 profile 入口（<项目>\dsh\home\profiles\archive -> <项目>\dsh）
+#          3. 项目内 profile 入口（<项目>\.dsh-home\profiles\archive -> <项目>\dsh）
 #          4. 项目内旧绝对路径引用重写（仅功能文件：cordis.patch.yml/脚本/配置；跳过 .md/.txt 文档与 URL，防误写）
 #          5. dsh-tools junction 与 modules -> node_modules 插件同步
 #          6. 数据目录存在性
@@ -237,7 +237,7 @@ if ($DryRun) {
     }
 
     # 2d) 项目 home 初始化（launcher 回退副本落在项目 home；与 ~/.dsh 完全隔离）
-    $projHome = Join-Path $root 'dsh\home'
+    $projHome = Join-Path $root '.dsh-home'
     $launcherTools = Join-Path $projHome 'profiles\node_modules\@deepseek-ai\dsh-tools'
     if (-not (Test-Path $launcherTools)) {
         Write-Host '   初始化项目 home（生成 launcher 回退副本，稍候）...' -ForegroundColor DarkYellow
@@ -245,7 +245,7 @@ if ($DryRun) {
         & node $engineBin --profile web --dump-config 2>&1 | Out-Null
         if (-not (Test-Path $launcherTools)) {
             Write-Err '项目 home 初始化未生成 profiles\node_modules\@deepseek-ai\dsh-tools。'
-            Write-Err '请手动运行：$env:DSH_HOME="<项目>\dsh\home"; node "<项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile web --dump-config'
+            Write-Err '请手动运行：$env:DSH_HOME="<项目>\.dsh-home"; node "<项目>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile web --dump-config'
             Read-Exit; exit 1
         }
         Write-Ok '项目 home 初始化完成'
@@ -261,17 +261,27 @@ if (-not (Test-Path $engineBin)) {
 }
 $ev = (& node $engineBin --version 2>&1 | Select-Object -First 1)
 Write-Ok ('项目 dsh 引擎：' + $ev)
-$projHome = Join-Path $root 'dsh\home'
+$projHome = Join-Path $root '.dsh-home'
 $env:DSH_HOME = $projHome   # 本次进程内注入：后续 junction / preset / dump-config 均落项目 home（不影响 ~/.dsh 与其它 dsh 环境）
 
 # ---------------- 4. 项目内 profile 入口 ----------------
-Write-Step '4/9 修复项目内 profile 入口（dsh\home\profiles\archive）'
+Write-Step '4/9 修复项目内 profile 入口（.dsh-home\profiles\archive）'
 $junction   = Join-Path $projHome 'profiles\archive'
 $juncTarget = Join-Path $root 'dsh'
 $wantNorm   = Normalize-Path $juncTarget
 
+# 旧版 home（dsh\home）遗留清理：其中含指向 dsh 的链接，会让"整目录复制"递归/失败。
+$legacyHome = Join-Path $root 'dsh\home'
+if (Test-Path -LiteralPath $legacyHome) {
+    if ($DryRun) { Write-Fix "将清理旧版 home：$legacyHome" }
+    else {
+        & cmd /c rmdir /s /q "`"$legacyHome`"" 2>$null | Out-Null
+        if (-not (Test-Path -LiteralPath $legacyHome)) { Write-Warn '已清理旧版 home（dsh\home）' }
+    }
+}
+
 # 2026-09-11 独立化：入口位于【项目 home 内】，与其它副本、与全局 ~/.dsh 互不影响，
-#   因此逻辑简单且幂等：缺失 → 创建；已存在但不是 junction → 报错（防误删真实目录）；
+#   逻辑简单且幂等：缺失 → 创建；被复制成真实目录 → 自动重建（home 属可再生运行时产物）；
 #   指向不对 → 直接修正回本副本（只影响本副本，不存在"抢别人入口"的问题）。
 try {
     if (-not (Test-Path $junction)) {
@@ -280,10 +290,14 @@ try {
     } else {
         $item = Get-Item $junction -Force
         if ($item.LinkType -ne 'Junction') {
-            Write-Err "「$junction」存在但不是 junction（真实目录），为避免误删请手动处理后重试。"
-            Read-Exit; exit 1
-        }
-        if ((Get-JunctionTarget $junction) -eq $wantNorm) {
+            if ($DryRun) { Write-Fix "将重建联接（当前是真实目录，疑似复制所致）：$junction" }
+            else {
+                & cmd /c rmdir /s /q "`"$junction`"" 2>$null | Out-Null
+                if (Test-Path $junction) { throw "无法移除真实目录：$junction" }
+                Set-Junction $junction $juncTarget
+                Write-Warn "profile 入口曾为真实目录（复制所致），已重建为联接：$junction -> $juncTarget"
+            }
+        } elseif ((Get-JunctionTarget $junction) -eq $wantNorm) {
             Write-Ok '联接已指向正确位置（无需修改）'
         } else {
             if ($DryRun) { Write-Fix "将重建联接：$junction 现指向 $($item.Target)，应指向 $juncTarget" }
@@ -315,9 +329,16 @@ $rootNorm = Normalize-Path $root
 # 匹配「盘符: 分隔符 任意路径段 DSH-ARCHIVE」（贪婪到行内最后一个 DSH-ARCHIVE），
 # 用于定位项目曾经所在位置的绝对路径；路径段排除 引号/冒号/换行/尖括号/竖线/反引号
 # （排除冒号可让一行里并列的多个盘符路径各自独立匹配，避免贪婪吞并）。
-# (?<![A-Za-z0-9]) 负向后顾：杜绝命中 URL 里的 "s:"/"t:"（如 httpC:/DSH-ARCHIVE...），
-# 只匹配真正的盘符路径（C:、D: 等，前置字符为空格/引号/等号/冒号/行首等）。
-$pathPattern = '(?<![A-Za-z0-9])([A-Za-z]):([\\/])([^":''\r\n<>|`]*)DSH-ARCHIVE'
+# 2026-09-11 重写算法加固（原"贪婪到最后一个 DSH-ARCHIVE"在项目路径本身含该词且后面还有段时
+# 会把路径层层拼接成垃圾，例如 …\DSH-ARCHIVE总文件夹\_e2e\B、用户常见的 DSH-ARCHIVE-Copy）。
+# 现改为"完整盘符路径 token + 三条精确规则"，严格幂等、输出统一正斜杠：
+#   ① 已在当前根下            → 原样保留
+#   ② 含 /dsh/data 标记       → 以当前根替换标记之前的部分（数据路径专用，最可靠）
+#   ③ 否则取"最后一个含 DSH-ARCHIVE 的路径段"为旧根，且余部必须是项目内已知子路径才替换
+#      （余部不认识就保留不动，宁可不改也不写坏）
+# (?<![A-Za-z0-9]) 负向后顾：杜绝命中 URL 里的 "s:"/"t:"（如 https://github.com/...）。
+$pathPattern = '(?<![A-Za-z0-9])([A-Za-z]):([\\/])([^":''\r\n<>|`]*)'
+$knownSub = '^(dsh|modules|presets|scripts|assets|ollama|backups|node_modules|README\.md|VERSION|一键|启动|停止|首次|项目|手机|真机|start|stop|update|install|fix|rollback|verify|sync|tray|push)(\.|/|$)'
 
 $files = @(Get-ChildItem $root -Recurse -File -Force -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch $excludeDir -and $textExts -contains $_.Extension.ToLowerInvariant() -and $skipNames -notcontains $_.Name })
@@ -336,13 +357,24 @@ foreach ($f in $files) {
     $new = [regex]::Replace($text, $pathPattern, {
         param($m)
         $sep = $m.Groups[2].Value
-        $candRaw = $m.Groups[1].Value + ':' + $sep + $m.Groups[3].Value + 'DSH-ARCHIVE'
-        # 比较时把占位符还原为反斜杠（JSON 转义不影响路径身份）
-        $cand = if ($isJson) { Normalize-Path ($candRaw.Replace($escChar, '\')) } else { Normalize-Path $candRaw }
-        if ($cand -eq $rootNorm) { return $m.Value }   # 已是当前根，跳过
-        if ($sep -eq '/') { return $rootFS }
-        if ($isJson) { return $rootBS.Replace('\', '\\') }   # JSON 里反斜杠需成对
-        return $rootBS
+        $tok = $m.Groups[1].Value + ':' + $sep + $m.Groups[3].Value
+        # 比较/判断时把 JSON 占位符还原为反斜杠（JSON 转义不影响路径身份）
+        $tokN = Normalize-Path ($tok.Replace($escChar, '\'))
+        if ([string]::IsNullOrEmpty($tokN)) { return $m.Value }
+        # ① 已在当前根下 → 原样保留（幂等关键）
+        if ($tokN -eq $rootNorm -or $tokN.StartsWith($rootNorm + '/')) { return $m.Value }
+        # ② 含 /dsh/data 标记 → 当前根 + 标记及其后（数据路径专用）
+        $i = $tokN.IndexOf('/dsh/data')
+        if ($i -ge 0) { return ($rootFS.TrimEnd('/') + $tokN.Substring($i)) }
+        # ③ 末个含 DSH-ARCHIVE 的路径段视为旧根；余部须为项目内已知子路径，否则保持不动
+        $parts = $tokN.Split('/')
+        $idx = -1
+        for ($k = 0; $k -lt $parts.Length; $k++) { if ($parts[$k] -like 'DSH-ARCHIVE*') { $idx = $k } }
+        if ($idx -ge 0 -and ($idx + 1) -lt $parts.Length) {
+            $rest = ($parts[($idx + 1)..($parts.Length - 1)] -join '/')
+            if ($rest -match $knownSub) { return ($rootFS.TrimEnd('/') + '/' + $rest) }
+        }
+        return $m.Value
     })
     if ($isJson) { $new = $new.Replace($escIn, '\\') }   # 还原转义
     $scanned++

@@ -8,8 +8,8 @@
 #  功能（与 Windows 版 fix-project-location.ps1 等价）：
 #    0. 校验项目根
 #    1. 环境检测：node / npm / pnpm（**项目自带 dsh 引擎，无需全局 dsh CLI**）
-#    2. 项目 home 准备（<项目>/dsh/home，DSH_HOME 注入；与 ~/.dsh 完全隔离）
-#    3. <项目>/dsh/home/profiles/archive 符号链接指向本项目 dsh 目录
+#    2. 项目 home 准备（<项目>/.dsh-home，DSH_HOME 注入；与 ~/.dsh 完全隔离）
+#    3. <项目>/.dsh-home/profiles/archive 符号链接指向本项目 dsh 目录
 #    4. 重写项目内旧 Windows 绝对路径 -> 当前安装目录
 #    5. 装入 agent preset archive-standard
 #    6. pnpm install + 模块源码同步 + dsh-tools 链接
@@ -69,7 +69,7 @@ if ! need git; then
 fi
 
 # ---------------- 2. 项目 home（DSH_HOME）准备 ----------------
-PROJ_HOME="$INSTALL_DIR/dsh/home"
+PROJ_HOME="$INSTALL_DIR/.dsh-home"
 export DSH_HOME="$PROJ_HOME"     # 仅本次安装进程内注入：所有引擎调用都用项目 home（与 ~/.dsh 隔离）
 LAUNCHER_TOOLS="$PROJ_HOME/profiles/node_modules/@deepseek-ai/dsh-tools"
 mkdir -p "$PROJ_HOME/profiles"
@@ -96,7 +96,23 @@ fi
 # JSON 内双反斜杠转义用私有区占位符保护；perl -i 按字节处理，BOM 不受影响。
 PERL_SCRIPT='
   if ($ARGV =~ /\.json$/i) { s{\\\\}{\x{E000}}g }
-  s{[A-Za-z]:(?!//)[\\/][^":\r\n<>|`]*DSH-ARCHIVE}{$ENV{ARC_DIR}}g;
+  s{(?<![A-Za-z0-9])([A-Za-z]:[\\/][^":\r\n<>|`]*)}{
+    my $t = $1; my $tt = $t; $tt =~ tr{\\}{/};
+    my $n = lc($tt);
+    my $root = $ENV{ARC_DIR};
+    my $rn = lc($root); $rn =~ tr{\\}{/}; $rn =~ s{/+$}{};
+    if ($n eq $rn || index($n, $rn . "/") == 0) { $t }
+    elsif ((my $i = index($n, "/dsh/data")) >= 0) { $root . substr($tt, $i) }
+    else {
+      my @p = split m{/}, $tt;
+      my $idx = -1;
+      for my $k (0 .. $#p) { $idx = $k if lc($p[$k]) =~ /^dsh-archive/ }
+      if ($idx >= 0 && $idx < $#p) {
+        my $rest = join("/", @p[$idx + 1 .. $#p]);
+        if (lc($rest) =~ m{^(dsh|modules|presets|scripts|assets|ollama|backups|node_modules|readme\.md|version|start|stop|update|install|fix|rollback|verify|sync|tray|push)(\.|/|$)}) { $root . "/" . $rest } else { $t }
+      } else { $t }
+    }
+  }ge;
   if ($ARGV =~ /\.json$/i) { s{\x{E000}}{\\\\}g }
   s{file:////+}{file:///}g;
 '
