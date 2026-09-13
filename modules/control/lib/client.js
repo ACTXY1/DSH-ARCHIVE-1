@@ -452,14 +452,44 @@ window.__ModuleLoader__.load({
 .arc-led-ops{margin-left:auto;display:flex;gap:4px;flex:none}
 /* ---- 审批卡（仿 DSH 本体 ApprovalPanel：warn 描边卡 + 条头 + 拒绝/允许一次） ---- */
 .arc-aprv-wrap{display:flex;flex-direction:column;gap:8px;padding:10px 20px 0}
-/* 功能页悬浮审批（fixed 于底部中央上方，避开记录面板） */
-.arc-aprv-float{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--arc-dock-h, 36px));z-index:900;width:min(560px,calc(100vw - 48px));display:flex;flex-direction:column;gap:8px;max-height:40vh;overflow-y:auto}
+/* 功能页共用浮层（ 起审批卡与提问卡同层堆叠，fixed 于底部中央上方，避开记录面板） */
+.arc-float-stack{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--arc-dock-h, 36px));z-index:900;width:min(560px,calc(100vw - 48px));display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto}
 .arc-aprv-card{border:1px solid var(--arc-warn);background:var(--arc-l1);box-shadow:0 4px 14px rgba(0,0,0,.25);border-radius:14px;overflow:hidden}
 .arc-aprv-strip{background:color-mix(in srgb, var(--arc-warn) 16%, transparent);color:var(--arc-warn);display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:12.5px}
 .arc-aprv-strip .dot{width:8px;height:8px;border-radius:50%;background:var(--arc-warn);flex:none}
 .arc-aprv-strip .tl{opacity:.75;font-size:11px}
 .arc-aprv-body{padding:10px 14px 0;font-size:13px;line-height:1.6;color:var(--arc-tx);word-break:break-word;max-height:96px;overflow-y:auto}
 .arc-aprv-actions{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px 12px}
+/* ---- 提问卡（仿 DSH 本体 ui-user-questions：提问流程 + 计划审阅） ----
+   宿主把 ask_user_question / exit_plan_mode 经 events.mux 以 question/requested 帧广播，
+   专属 UI 原先只接管 approval/*，该帧无人应答 → 工具调用挂起到取消、用户全程看不到界面。 */
+.arc-qst-wrap{display:flex;flex-direction:column;gap:8px;padding:10px 20px 0;max-height:52vh;overflow-y:auto}
+.arc-qst-card{border:1px solid var(--arc-brand);background:var(--arc-l1);box-shadow:0 4px 14px rgba(0,0,0,.25);border-radius:14px;overflow:hidden}
+.arc-qst-strip{background:color-mix(in srgb, var(--arc-brand) 14%, transparent);color:var(--arc-brand);display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:12.5px}
+.arc-qst-strip .dot{width:8px;height:8px;border-radius:50%;background:var(--arc-brand);flex:none}
+.arc-qst-strip .tl{opacity:.75;font-size:11px;margin-left:auto}
+.arc-qst-body{padding:10px 14px 0;max-height:40vh;overflow-y:auto}
+.arc-qst-q + .arc-qst-q{margin-top:12px;border-top:1px dashed var(--arc-bd);padding-top:10px}
+.arc-qst-hd{font-size:11px;color:var(--arc-faint);margin-bottom:2px}
+.arc-qst-tx{font-size:13.5px;line-height:1.6;color:var(--arc-tx);word-break:break-word;margin-bottom:8px}
+.arc-qst-opts{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.arc-qst-opt{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;border:1px solid var(--arc-bd);border-radius:9px;background:var(--arc-bg);color:var(--arc-tx);cursor:pointer;font-size:12.5px;padding:7px 10px;line-height:1.5;font-family:inherit}
+.arc-qst-opt:hover{border-color:var(--arc-brand)}
+.arc-qst-opt.on{border-color:var(--arc-brand);background:color-mix(in srgb, var(--arc-brand) 12%, transparent);font-weight:600}
+.arc-qst-opt:disabled{opacity:.55;cursor:wait}
+.arc-qst-opt .d{font-size:11px;color:var(--arc-faint);font-weight:400}
+.arc-qst-custom{width:100%;box-sizing:border-box;border:1px solid var(--arc-bd);border-radius:9px;background:var(--arc-bg);color:var(--arc-tx);font-size:12.5px;padding:7px 10px;font-family:inherit}
+.arc-qst-plan{border:1px dashed var(--arc-bd);border-radius:10px;padding:10px 12px;max-height:30vh;overflow-y:auto;background:var(--arc-bg);font-size:12.5px;line-height:1.65}
+.arc-qst-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:10px 14px 12px;flex-wrap:wrap}
+.arc-qst-note{font-size:11px;color:var(--arc-faint);margin-right:auto}
+/* ---- 回合失败红条（host/agent-error） ---- */
+.arc-err-wrap{display:flex;flex-direction:column;gap:8px;padding:10px 20px 0;max-height:26vh;overflow-y:auto}
+.arc-err-card{border:1px solid var(--arc-err);background:var(--arc-l1);box-shadow:0 4px 14px rgba(0,0,0,.25);border-radius:12px;overflow:hidden}
+.arc-err-strip{background:color-mix(in srgb, var(--arc-err) 16%, transparent);color:var(--arc-err);display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:12.5px}
+.arc-err-strip .dot{width:8px;height:8px;border-radius:50%;background:var(--arc-err);flex:none}
+.arc-err-strip .tl{opacity:.75;font-size:11px;margin-left:auto}
+.arc-err-body{padding:9px 14px 0;font-size:12.5px;line-height:1.6;color:var(--arc-tx);word-break:break-word;max-height:140px;overflow-y:auto;font-family:var(--arc-mono)}
+.arc-err-actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 14px 10px}
 /* ---- 权限预设（仿 DSH 本体 composer 访问模式） ---- */
 .arc-perm-row{display:flex;align-items:center;gap:8px;padding:8px 20px 0}
 .arc-perm-row .lbl{font-size:11px;color:var(--arc-faint);flex:none}
@@ -600,6 +630,128 @@ window.__ModuleLoader__.load({
         );
       });
 
+      /**
+       * 提问卡（与 DSH 本体 ui-user-questions 同源）。
+       * 背景：宿主把 `ask_user_question` 与 `exit_plan_mode`（plan-review 意图）经 /api/events.mux 以
+       * server-request 帧 `question/requested` 广播（信封 rpcId 即该次提问的稳定 id），由浏览器以
+       * POST /api/respond（client-response 信封）回包 {sessionId, answer:{answers:[{id,selected,custom?}]}}；
+       * 取消则回 result.ok=false + error.code='cancelled'。
+       * 专属 UI 原先只接管 approval/*，question/* 无人应答 → 工具调用一直挂起到轮次取消，用户全程看不到界面。
+       * 本组件与本体通用流程同构：逐题渲染、单选/多选、自定义答案、整批提交（未作答按「跳过」）；
+       * plan-review 意图改渲染审阅卡（计划 markdown + 批准/拒绝/先聊聊），回答用提问方自己的选项标签。
+       */
+      /** 收敛 plan-review 呈现意图（与本体 planReviewOf 同构；不满足条件则回退通用流程）。 */
+      function planReviewOf(questions) {
+        if (!Array.isArray(questions) || questions.length !== 1) return null;
+        const q = questions[0];
+        const intent = q && q.intent;
+        if (!intent || intent.kind !== 'plan-review') return null;
+        if (typeof q.detail !== 'string' || q.detail.trim() === '') return null;
+        if (q.multiSelect === true) return null;
+        const opts = Array.isArray(q.options) ? q.options : [];
+        if (opts.length === 0 || opts.length > 2) return null; // 二元单选以外的答案两个按钮表达不了
+        const approve = opts.find((o) => o && o.label === intent.approve);
+        if (!approve) return null;
+        const decline = opts.find((o) => o !== approve);
+        return { id: q.id, question: q.question, plan: q.detail, approve, decline: decline ?? null };
+      }
+      /** 提问来源标签（主会话/其他会话）。 */
+      function questionSourceLabel(item) {
+        const sid = String(item?.sessionId ?? '');
+        if (sid === MAIN_SESSION_ID) return '主会话';
+        return sid ? `会话 ${sid.slice(-6)}` : '';
+      }
+
+      const QuestionCard = React.memo(function QuestionCard({ item, onAnswer, onCancel }) {
+        const questions = Array.isArray(item.questions) ? item.questions : [];
+        const review = planReviewOf(questions);
+        const [drafts, setDrafts] = useState(() => questions.map(() => ({ selected: [], custom: '' })));
+        const [busy, setBusy] = useState(false);
+        const patch = (i, next) => setDrafts((prev) => prev.map((d, j) => (j === i ? { ...d, ...next } : d)));
+        /** 单选：选选项即清空自定义答案（宿主校验自定义与选项互斥）；多选可并存。 */
+        const toggle = (i, label, multi) => {
+          const cur = drafts[i] ?? { selected: [], custom: '' };
+          if (multi) {
+            const has = cur.selected.includes(label);
+            patch(i, { selected: has ? cur.selected.filter((x) => x !== label) : [...cur.selected, label] });
+          } else {
+            patch(i, { selected: cur.selected.includes(label) ? [] : [label], custom: '' });
+          }
+        };
+        const setCustom = (i, text) => {
+          const multi = questions[i]?.multiSelect === true;
+          patch(i, multi ? { custom: text } : { custom: text, selected: [] });
+        };
+        /** 组装整批答案：未作答的题按「跳过」提交（{selected: []}），与本体一致。 */
+        const collect = () => ({
+          answers: questions.map((q, i) => {
+            const d = drafts[i] ?? { selected: [], custom: '' };
+            const custom = String(d.custom ?? '').trim();
+            return {
+              id: String(q?.id ?? ''),
+              selected: Array.isArray(d.selected) ? d.selected : [],
+              ...(custom ? { custom } : {}),
+            };
+          }),
+        });
+        const run = (fn) => { setBusy(true); void Promise.resolve(fn()).finally(() => setBusy(false)); };
+        const submit = () => run(() => onAnswer(item, collect()));
+        const cancel = () => run(() => onCancel(item));
+        const decide = (option) => {
+          if (!option) return;
+          run(() => onAnswer(item, { answers: [{ id: String(review?.id ?? ''), selected: [String(option.label)] }] }));
+        };
+        if (review) {
+          return e('div', { className: 'arc-qst-card' },
+            e('div', { className: 'arc-qst-strip' },
+              e('span', { className: 'dot' }),
+              '计划待审阅',
+              e('span', { className: 'tl' }, questionSourceLabel(item))),
+            e('div', { className: 'arc-qst-body' },
+              e('div', { className: 'arc-qst-tx' }, String(review.question ?? '')),
+              e('div', { className: 'arc-qst-plan' }, renderMessage(review.plan))),
+            e('div', { className: 'arc-qst-actions' },
+              e('span', { className: 'arc-qst-note' }, '批准后按计划执行；拒绝或「先聊聊」都不会改动任何内容'),
+              e('button', { className: 'arc-btn', disabled: busy, onClick: cancel }, '先聊聊'),
+              review.decline
+                ? e('button', { className: 'arc-btn danger', disabled: busy, onClick: () => decide(review.decline) }, String(review.decline.label))
+                : null,
+              e('button', { className: 'arc-btn primary', disabled: busy, onClick: () => decide(review.approve) }, String(review.approve.label))));
+        }
+        return e('div', { className: 'arc-qst-card' },
+          e('div', { className: 'arc-qst-strip' },
+            e('span', { className: 'dot' }),
+            '需要你的回答',
+            e('span', { className: 'tl' }, questionSourceLabel(item))),
+          e('div', { className: 'arc-qst-body' },
+            questions.map((q, i) => e('div', { key: String(q?.id ?? i), className: 'arc-qst-q' },
+              q?.header ? e('div', { className: 'arc-qst-hd' }, String(q.header)) : null,
+              e('div', { className: 'arc-qst-tx' }, String(q?.question ?? '')),
+              Array.isArray(q?.options) && q.options.length > 0
+                ? e('div', { className: 'arc-qst-opts' }, q.options.map((o, k) => e('button', {
+                    key: `${k}:${String(o?.label ?? '')}`,
+                    type: 'button',
+                    disabled: busy,
+                    className: `arc-qst-opt${(drafts[i]?.selected ?? []).includes(o?.label) ? ' on' : ''}`,
+                    onClick: () => toggle(i, o?.label, q?.multiSelect === true),
+                  },
+                  e('span', null, String(o?.label ?? '')),
+                  o?.description ? e('span', { className: 'd' }, String(o.description)) : null)))
+                : null,
+              e('input', {
+                className: 'arc-qst-custom',
+                value: drafts[i]?.custom ?? '',
+                disabled: busy,
+                placeholder: q?.multiSelect === true ? '补充说明（可选）…' : '或直接输入你的回答…',
+                onChange: (ev) => setCustom(i, ev.target.value),
+              })))),
+          e('div', { className: 'arc-qst-actions' },
+            e('span', { className: 'arc-qst-note' },
+              questions.length > 1 ? `共 ${questions.length} 题；未作答的题按「跳过」提交` : '未作答时按「跳过」提交'),
+            e('button', { className: 'arc-btn', disabled: busy, onClick: cancel }, '取消提问'),
+            e('button', { className: 'arc-btn primary', disabled: busy, onClick: submit }, busy ? '提交中…' : '提交')));
+      });
+
       // ================= 应用 =================
       function App() {
         const [page, setPage] = useState('chat');
@@ -685,11 +837,20 @@ window.__ModuleLoader__.load({
         const [permOpen, setPermOpen] = useState(false);
         const [permBusy, setPermBusy] = useState(false);
         const [pendingApprovals, setPendingApprovals] = useState([]);
+        //  待回答提问（mux question/requested 帧）：元素 {rpcId, sessionId, questions}；
+        // rpcId 即该次提问的稳定 id（宿主 question/requested 的 server-request 信封 rpcId），
+        // 回答/取消经 /api/respond 回包，question/resolved 帧到达时移除。
+        const [pendingQuestions, setPendingQuestions] = useState([]);
+        //  回合失败（host/agent-error 帧）：元素 {key, sessionId, message, at}。
+        // 「没有轮次位置的实时失败」在专属 UI 里原先完全不可见——回合静默失败时用户只看到
+        // "AI 没回"，看不出发生了什么；现在以红条呈现，可手动关掉。
+        const [agentErrors, setAgentErrors] = useState([]);
         const chatCacheRef = useRef({});
         const inFlightRef = useRef(null);
         const optimisticRef = useRef([]);
         const loadingOlderRef = useRef(false);
         const streamAbortRef = useRef(null);
+        const hostStreamAbortRef = useRef(null); //：/api/events.host 常驻流（见 ensureHostStream）
         const renderChatRef = useRef(null); // 由 useCallback 赋值，供 SSE 回调读取
         // 最近新建的会话（60s 内侧栏始终显示，消除新建后因时序/未切回导致的"看不到"；之后恢复"空白非当前隐藏"）
         const newlyCreatedRef = useRef({});
@@ -869,8 +1030,24 @@ window.__ModuleLoader__.load({
             showToast(`切换失败：${String(error?.message || error)}`);
           } finally { setPermBusy(false); }
         };
-        /** 审批应答：把用户决定经 /api/respond（client-response 信封）回给宿主。
-         *  与 DSH 本体 PendingWait.respond 同路径：{type:'client-response', rpcId, result:{ok,value}}。 */
+        /** 客户端应答统一出口：把 client-response 信封经 /api/respond 回给宿主。
+         *  与 DSH 本体 PendingWait.respond 同路径：{type:'client-response', rpcId, result:{ok,value}}；
+         *  审批与提问共用（ 提问卡接入时抽出，行为与抽出前逐字一致）。 */
+        const postRespond = async (message) => {
+          // 优先走 connection.api.respond（客户端-响应专用通道）；无则退回裸 fetch
+          if (connection && connection.api && typeof connection.api.respond === 'function') {
+            const receipt = await connection.api.respond(message);
+            return Boolean(receipt && receipt.accepted === true);
+          }
+          const res = await fetch('/api/respond', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(message),
+          });
+          const j = await res.json().catch(() => null);
+          return Boolean(j && j.accepted === true);
+        };
+        /** 审批应答：把用户决定经 /api/respond（client-response 信封）回给宿主。 */
         const answerApproval = async (item, outcome) => {
           if (!item || !item.rpcId || !item.approvalId) return;
           const message = {
@@ -879,30 +1056,52 @@ window.__ModuleLoader__.load({
             result: { ok: true, value: { sessionId: item.sessionId, approvalId: item.approvalId, outcome } },
           };
           try {
-            // 优先走 connection.api.respond（客户端-响应专用通道）；无则退回裸 fetch
-            let accepted = false;
-            if (connection && connection.api && typeof connection.api.respond === 'function') {
-              const receipt = await connection.api.respond(message);
-              accepted = Boolean(receipt && receipt.accepted === true);
-            } else {
-              const res = await fetch('/api/respond', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(message),
-              });
-              const j = await res.json().catch(() => null);
-              accepted = Boolean(j && j.accepted === true);
-            }
-            if (accepted) {
-              setPendingApprovals((prev) => prev.filter((a) => a.approvalId !== item.approvalId || a.sessionId !== item.sessionId));
-              showToast(outcome === 'allowed-once' ? '已允许一次' : '已拒绝');
-            } else {
-              // 未受理（可能已过期/被另一标签页处理）→ 也移出本地列表，避免残留卡片
-              setPendingApprovals((prev) => prev.filter((a) => a.approvalId !== item.approvalId || a.sessionId !== item.sessionId));
-            }
+            const accepted = await postRespond(message);
+            // 未受理（可能已过期/被另一标签页处理）→ 也移出本地列表，避免残留卡片
+            setPendingApprovals((prev) => prev.filter((a) => a.approvalId !== item.approvalId || a.sessionId !== item.sessionId));
+            if (accepted) showToast(outcome === 'allowed-once' ? '已允许一次' : '已拒绝');
           } catch (error) {
             showToast(`审批应答失败：${String(error?.message || error)}`);
           }
+        };
+        // ============ 提问应答（与审批同通道） ============
+        /** 提交整批答案：value={sessionId, answer:{answers}}（宿主 questionResponsePayloadSchema）。
+         *  未受理时同样移出本地列表——宿主侧已 resolved/过期，卡片不应残留。 */
+        const answerQuestion = async (item, answer) => {
+          if (!item || !item.rpcId) return;
+          try {
+            const accepted = await postRespond({
+              type: 'client-response',
+              rpcId: item.rpcId,
+              result: { ok: true, value: { sessionId: item.sessionId, answer } },
+            });
+            setPendingQuestions((prev) => prev.filter((q) => q.rpcId !== item.rpcId));
+            if (accepted) showToast('已提交回答');
+            else showToast('该提问已失效（可能已过期或被其他标签页处理）');
+          } catch (error) {
+            showToast(`提交回答失败：${String(error?.message || error)}`);
+          }
+        };
+        /** 取消提问（本体「关闭」语义）：result.ok=false + error.code='cancelled'，
+         *  宿主据此以 ASK_CANCELLED 结算工具调用，而不是一直挂起。 */
+        const cancelQuestion = async (item) => {
+          if (!item || !item.rpcId) return;
+          try {
+            const accepted = await postRespond({
+              type: 'client-response',
+              rpcId: item.rpcId,
+              result: { ok: false, error: { code: 'cancelled', message: 'the user cancelled ask_user_question', details: {} } },
+            });
+            setPendingQuestions((prev) => prev.filter((q) => q.rpcId !== item.rpcId));
+            if (accepted) showToast('已取消本次提问');
+          } catch (error) {
+            showToast(`取消提问失败：${String(error?.message || error)}`);
+          }
+        };
+        /** 提问卡列表（当前会话 + 主会话，与审批卡同一取材口径）。 */
+        const questionCardsOf = (items) => {
+          if (!Array.isArray(items) || items.length === 0) return null;
+          return items.map((item) => e(QuestionCard, { key: item.rpcId, item, onAnswer: answerQuestion, onCancel: cancelQuestion }));
         };
         /** 审批卡列表（当前会话 + 主会话的待审批都渲染；answerApproval 按 approvalId/sessionId 应答）。 */
         const approvalCardsOf = (items) => {
@@ -939,6 +1138,22 @@ window.__ModuleLoader__.load({
           }
           if (f.type === 'approval/resolved') {
             setPendingApprovals((prev) => prev.filter((a) => !(a.approvalId === f.approvalId && a.sessionId === f.sessionId)));
+            return;
+          }
+          //  提问帧（ask_user_question / exit_plan_mode；与 DSH 本体同源）：
+          // question/requested 是**可应答的 server-request**——信封 rpcId 即该次提问的稳定 id，
+          // 必须原样回包才能结算工具调用；question/resolved 表示宿主侧已结算（含别的标签页处理）。
+          // 打开 mux 时宿主会重放仍未结算的提问（rpcId 原样），故刷新/断线重连后卡片自动恢复。
+          if (f.type === 'question/requested') {
+            if (typeof f.sessionId !== 'string' || !Array.isArray(f.questions) || f.questions.length === 0 || !envRpcId) return;
+            setPendingQuestions((prev) => prev.some((q) => q.rpcId === envRpcId)
+              ? prev
+              : [...prev, { rpcId: envRpcId, sessionId: f.sessionId, questions: f.questions }]);
+            return;
+          }
+          if (f.type === 'question/resolved') {
+            if (typeof f.questionRpcId !== 'string') return;
+            setPendingQuestions((prev) => prev.filter((q) => q.rpcId !== f.questionRpcId));
             return;
           }
           //  修复（H1）：乐观占位清理必须与流式开关无关——轮询模式（流式关闭）下
@@ -1037,6 +1252,65 @@ window.__ModuleLoader__.load({
             ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
           } catch { /* 构造失败 */ }
         }, [handleMuxFrame]);
+        /**  主机事件流 /api/events.host（WebSocket，与 mux 同款信封；断开 3s 重连）。
+         *  只接一种帧：host/agent-error——events.d.ts 明确它是"无轮次位置的实时失败"的唯一出口
+         *  （例如 provider 报错、模型调用失败在回合开始前挂掉）；专属 UI 原先完全不订阅该流，
+         *  于是这类失败只表现为"AI 没回"，用户无从判断。其余主机帧（会话增删/工作区变更等）
+         *  仍由既有 3s 轮询收敛，不在此处理。 */
+        const handleHostFrame = useCallback((raw) => {
+          const f = (raw && typeof raw === 'object' && raw.payload && typeof raw.payload === 'object') ? raw.payload : raw;
+          if (!f || typeof f !== 'object' || f.type !== 'host/agent-error') return;
+          const sessionId = String(f.sessionId ?? '');
+          const message = String(f.message ?? '').trim() || '回合失败（未知原因）';
+          setAgentErrors((prev) => {
+            if (prev.some((x) => x.sessionId === sessionId && x.message === message)) return prev;
+            const next = [...prev, { key: `${Date.now()}:${prev.length}`, sessionId, message, at: Date.now() }];
+            return next.slice(-3); // 只留最近 3 条，防止刷屏
+          });
+          showToast(`⚠ 回合失败：${message.slice(0, 60)}`);
+        }, [showToast]);
+        const ensureHostStream = useCallback(() => {
+          if (hostStreamAbortRef.current || typeof location === 'undefined') return;
+          let ws = null;
+          let closed = false;
+          let retryTimer = null;
+          const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/events.host`;
+          const stop = () => {
+            if (retryTimer !== null) { try { clearTimeout(retryTimer); } catch { /* ignore */ } retryTimer = null; }
+            if (ws) { try { ws.onmessage = null; ws.onclose = null; ws.onerror = null; ws.close(); } catch { /* ignore */ } }
+            ws = null;
+          };
+          hostStreamAbortRef.current = { abort: () => { closed = true; stop(); } };
+          const retry = () => {
+            if (closed) return;
+            retryTimer = setTimeout(() => { retryTimer = null; ensureHostStream(); }, 3000);
+          };
+          try {
+            ws = new WebSocket(url);
+            ws.onmessage = (ev) => {
+              if (typeof ev.data !== 'string') return;
+              try { handleHostFrame(JSON.parse(ev.data)); } catch { /* 单帧损坏跳过 */ }
+            };
+            ws.onclose = () => {
+              hostStreamAbortRef.current = null;
+              if (!closed) retry();
+            };
+            ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
+          } catch { /* 构造失败 */ }
+        }, [handleHostFrame]);
+        /** 关闭一条失败提示（当前会话+主会话展示，各条独立关闭）。 */
+        const dismissAgentError = (key) => setAgentErrors((prev) => prev.filter((x) => x.key !== key));
+        const agentErrorCardsOf = (items) => {
+          if (!Array.isArray(items) || items.length === 0) return null;
+          return items.map((item) => e('div', { key: item.key, className: 'arc-err-card' },
+            e('div', { className: 'arc-err-strip' },
+              e('span', { className: 'dot' }),
+              '回合失败',
+              e('span', { className: 'tl' }, questionSourceLabel(item))),
+            e('div', { className: 'arc-err-body' }, item.message),
+            e('div', { className: 'arc-err-actions' },
+              e('button', { className: 'arc-btn', onClick: () => dismissAgentError(item.key) }, '知道了'))));
+        };
         /** 流式开关（settings 持久化）：开=实时增量渲染聊天；关=聊天回退轮询（审批帧仍实时，
          *  连接保持——见 ensureStream 注释）。 */
         const toggleStreaming = async () => {
@@ -1084,6 +1358,8 @@ window.__ModuleLoader__.load({
             }
             //：mux 常驻（审批帧实时），不随流式开关启停——仅聊天渲染由 streamingRef 控制
             ensureStream();
+            //：主机事件流常驻（host/agent-error → 回合失败红条），与流式开关无关
+            ensureHostStream();
           })();
           let alive = true;
           let t = 0;
@@ -1113,7 +1389,7 @@ window.__ModuleLoader__.load({
           const onVis = () => { if (typeof document !== 'undefined' && !document.hidden) void refreshSidebar(); };
           if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
           return () => { alive = false; clearTimeout(t); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis); };
-        }, [refreshSidebar, loadTail, refreshModel, ensureStream, rpc]);
+        }, [refreshSidebar, loadTail, refreshModel, ensureStream, ensureHostStream, rpc]);
 
         // 首次交互解锁提示音（浏览器自动播放策略）
         useEffect(() => {
@@ -1128,6 +1404,8 @@ window.__ModuleLoader__.load({
         useEffect(() => () => {
           if (streamAbortRef.current) { try { streamAbortRef.current.abort(); } catch { /* ignore */ } }
           streamAbortRef.current = null;
+          if (hostStreamAbortRef.current) { try { hostStreamAbortRef.current.abort(); } catch { /* ignore */ } }
+          hostStreamAbortRef.current = null;
         }, []);
 
         const openSession = async (id) => {
@@ -1502,6 +1780,19 @@ window.__ModuleLoader__.load({
                   page === 'vision' ? e(PageVision, { rpc, showToast }) :
                   page === 'report' ? e(PageReport, { rpc, showToast }) : null),
             page === 'chat' && [
+              //  回合失败红条（当前会话 + 主会话）——置于最前：失败就是"AI 没回"的解释
+              (() => {
+                const pend = agentErrors.filter((x) => x.sessionId === stateRef.current.currentId || x.sessionId === MAIN_SESSION_ID);
+                const cards = agentErrorCardsOf(pend);
+                return cards ? e('div', { key: 'errs', className: 'arc-err-wrap' }, cards) : null;
+              })(),
+              //  提问卡（当前会话 + 主会话；仅当有提问时显示）——置于审批卡之前：
+              // 提问是"回合卡在中途等人"的强阻塞态，优先级高于提权审批的展示。
+              (() => {
+                const pend = pendingQuestions.filter((q) => q.sessionId === stateRef.current.currentId || q.sessionId === MAIN_SESSION_ID);
+                const cards = questionCardsOf(pend);
+                return cards ? e('div', { key: 'qst', className: 'arc-qst-wrap' }, cards) : null;
+              })(),
               //  审批卡（当前会话 + 主会话待审批；仅当有请求时显示）
               (() => {
                 const pend = pendingApprovals.filter((a) => a.sessionId === stateRef.current.currentId || a.sessionId === MAIN_SESSION_ID);
@@ -1556,10 +1847,13 @@ window.__ModuleLoader__.load({
           ),
           toast ? e('div', { className: 'arc-toast' }, toast) : null,
           //：功能页（非聊天）悬浮审批卡——主会话的主动/定时任务也可能触发审批
+          //：与悬浮提问卡合为一个底部浮层（同一列，提问在上），避免两张卡相互压盖
           (page !== 'chat' && (() => {
-            const pend = pendingApprovals.filter((a) => a.sessionId === MAIN_SESSION_ID);
-            const cards = approvalCardsOf(pend);
-            return cards ? e('div', { key: 'aprvfloat', className: 'arc-aprv-float' }, cards) : null;
+            const qCards = questionCardsOf(pendingQuestions.filter((q) => q.sessionId === MAIN_SESSION_ID));
+            const aCards = approvalCardsOf(pendingApprovals.filter((a) => a.sessionId === MAIN_SESSION_ID));
+            const eCards = agentErrorCardsOf(agentErrors.filter((x) => x.sessionId === MAIN_SESSION_ID));
+            if (!qCards && !aCards && !eCards) return null;
+            return e('div', { key: 'floatstack', className: 'arc-float-stack' }, eCards, qCards, aCards);
           })()),
           newSessionOpen ? e('div', { className: 'arc-confirm' },
             e('div', { className: 'box' },

@@ -97,6 +97,10 @@ const DEFAULTS = {
   sleepMaxMs: 28800000,         // 无 TTL 睡眠行的绝对兜底上限（8 小时；正常带 TTL 的睡眠不适用）
   sleepCooldownMs: 10800000,    // 解除后强制清醒间隔（3 小时），期间无法再睡眠（防抖动）
   sleepCheckWindowMs: 28800000, // "有工作任务"判定窗口：未来多久内到期的 pending 任务（默认 8h）
+  //  无人值守提示：距最近一次真实用户消息超过该时长（或处于睡眠期）时，
+  // 注入 <interaction-surface> 提醒不要用 ask_user_question 等待（提问卡需用户打开页面
+  // 才能作答，自动回合里一问就挂死整轮）。用户在线时不注入，日常零开销。
+  unattendedAfterMs: 1800000,   // 30 分钟
 };
 
 //：pre-turn 参数合法范围（UI 编辑框与 configure/normalizeConfig 双端一致）。
@@ -185,6 +189,9 @@ function normalizeConfig(raw = {}) {
   num('sleepMaxMs', 1000);
   num('sleepCooldownMs', 1000);
   num('sleepCheckWindowMs', 1000);
+  //  无人值守提示判定阈值（毫秒）：距最近一次真实用户消息超过该时长即视为"可能不在"。
+  // 设 0 等于关闭该提示（只有同一毫秒内才可能不注入）。
+  num('unattendedAfterMs', 0);
   if (raw.enabled !== undefined) {
     if (typeof raw.enabled !== 'boolean') throw new Error('archive-loop 配置错误：enabled 必须是布尔');
     cfg.enabled = raw.enabled;
@@ -269,6 +276,9 @@ export function apply(ctx, rawConfig) {
     dialogue: [],
     //：最近一次决策的触发原因（<loop-analysis> 注入时附带，供模型判断新旧/来源）。
     lastDecisionReason: '',
+    //：最近一次"任意会话"的真实用户消息时间（无人值守提示的判定依据；
+    // 与 latestUserInput 分开——后者只记主会话且被 pre-turn 决策消费，不可挪作他用）。
+    lastUserAt: 0,
   };
   const guards = new LoopGuards(config);
   let lastHour = new Date().getHours();
@@ -1314,6 +1324,29 @@ export function apply(ctx, rawConfig) {
     logger.warn(`archive-loop: output-selfcheck 注入失败：${error.message}`);
   }
 
+  //  无人值守提示：专属 UI 的提问卡需要用户**打开页面**才看得见、才答得上，
+  // 而 ask_user_question 会阻塞到用户作答（宿主侧无超时，只随轮次取消）。自动回合
+  //（定时任务/主动流程触发）里用户多半不在，一问就把整轮挂死。故只在"用户大概率不在"时注入：
+  // 用户刚发过消息的回合（含所有会话）与 30 分钟内的对话一律不注入 → 日常零 token 开销。
+  try {
+    ctx.systemPrompt.context({
+      name: 'interaction-surface',
+      order: config.injectOrder - 40,
+      text: () => {
+        if (config.unattendedAfterMs <= 0) return '';
+        const now = Date.now();
+        const lastUserAt = Number(state.lastUserAt ?? 0);
+        const asleep = state.sleep.phase === 'asleep';
+        const idleMs = lastUserAt > 0 ? now - lastUserAt : Number.POSITIVE_INFINITY;
+        if (!asleep && idleMs <= config.unattendedAfterMs) return '';
+        const why = asleep ? '处于睡眠静默期' : `已 ${Math.round(idleMs / 60000)} 分钟没有发来消息`;
+        return `<interaction-surface>用户当前可能不在电脑前（${why}）。专属界面的提问卡只有用户打开页面时才能看到并作答，此刻调用 ask_user_question 会一直挂起到本回合被取消：需要用户确认或选择时，请把问题和选项直接写在回复里，或经通知渠道告知，等用户下次开口再问。</interaction-surface>`;
+      },
+    });
+  } catch (error) {
+    logger.warn(`archive-loop: systemPrompt context(interaction-surface) 注册失败：${error.message}`);
+  }
+
   // 工具：手动触发 / 运行时调整 / 查看状态
   const tools = ctx.get('tools');
   if (tools !== undefined) {
@@ -1438,6 +1471,10 @@ export function apply(ctx, rawConfig) {
       //  仅主会话的用户消息进入缓冲（其他会话的消息混入会让主会话
       // pre-turn 的 <user-input> 用错输入）
       const isMain = session?.id === MAIN_SESSION_ID || session?.sessionId === MAIN_SESSION_ID;
+      if (event?.type === 'user/message' && event?.data?.source?.kind === 'user') {
+        //：任意会话的真实用户消息都算"用户在线"（无人值守提示判定用）
+        state.lastUserAt = Date.now();
+      }
       if (event?.type === 'user/message' && event?.data?.source?.kind === 'user' && isMain) {
         //：用户主动发消息 → 暂停时间驱动循环 quietAfterUserMs + 中止并行循环（时间驱动/过期 pre-turn）
         handleUserMessage();

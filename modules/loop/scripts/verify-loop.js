@@ -134,6 +134,17 @@ const checks = [
   ['决策含分析', captured.emits.some((e) => e.name === 'archive/loop-cycle' && e.payload.decision.analysis.includes('睡眠中'))],
   ['loop 状态已更新(cycleCount≥1)', api.stats().cycleCount >= 1],
   ['systemPrompt context 注册', captured.contexts.some((c) => c.name === 'loop-latest-analysis')],
+  //  无人值守提示：无用户消息时注入（提问卡需用户打开页面才能作答），
+  // 任意会话刚收到真实用户消息后不再注入（日常零 token 开销）。
+  // 用非主会话 id 触发，避免 handleUserMessage 改写静默窗影响后续断言块。
+  ['无人值守提示：无用户消息注入、用户发言后不注入', (() => {
+    const surface = captured.contexts.find((c) => c.name === 'interaction-surface');
+    if (!surface || typeof surface.text !== 'function') return false;
+    const away = surface.text();
+    captured.handlers?.['session/event']?.({ id: 'session-other' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '在吗' }] } });
+    const online = surface.text();
+    return typeof away === 'string' && away.includes('ask_user_question') && online === '';
+  })()],
   ['3 个工具注册', captured.tools.join(',') === 'loop_trigger,loop_config,loop_view'],
   ['状态变化事件监听', typeof captured.handlers?.['archive/state-changed'] === 'function'],
   ['beforeTurn 返回决策', preTurn?.decision?.analysis.includes('睡眠中')],
