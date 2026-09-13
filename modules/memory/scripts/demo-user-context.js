@@ -1,5 +1,15 @@
 // 真实库演示：用户画像 + 当前状态（"睡眠中"场景），并渲染注入快照
+// 用法：node scripts/demo-user-context.js --live（写入真实库必须显式确认）
 import { MemoryCore } from '../lib/core.js';
+
+// 安全护栏：本脚本写入项目「真实」记忆库，且用户状态单槽互斥——种入演示状态会把
+// 用户真实状态（如"睡眠中"）挤为已过期，自循环据此误判"用户已醒"而提前离开睡眠期
+// （实机已发生）。必须显式确认才允许写入。
+if (!process.argv.includes('--live') && process.env.DSH_ARCHIVE_ALLOW_LIVE_WRITE !== '1') {
+  console.error('[已阻止] demo-user-context.js 会写入项目真实记忆库（用户数据与当前状态）。');
+  console.error('确认要写入请加参数 --live，或设置环境变量 DSH_ARCHIVE_ALLOW_LIVE_WRITE=1。');
+  process.exit(1);
+}
 
 const core = new MemoryCore({
   dbPath: 'C:/DSH-ARCHIVE/dsh/data/memory.db',

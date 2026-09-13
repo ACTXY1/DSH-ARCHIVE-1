@@ -176,6 +176,8 @@ export class MemoryStore {
       ftsExists: this.fts ? this.db.prepare('SELECT rowid FROM memories_fts WHERE rowid = ?') : null,
       ftsDelete: this.fts ? this.db.prepare("DELETE FROM memories_fts WHERE rowid = ?") : null,
       ftsCount: this.fts ? this.db.prepare('SELECT COUNT(*) AS n FROM memories_fts') : null,
+      allRowids: this.db.prepare('SELECT rowid FROM memories'),
+      ftsRowids: this.fts ? this.db.prepare('SELECT rowid FROM memories_fts') : null,
       ftsQuery: this.fts ? this.db.prepare('SELECT rowid, bm25(memories_fts) AS rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?') : null,
       profileInsert: this.db.prepare(`
         INSERT INTO user_profile (id, key, content, confidence, evidence_count, source, created_at, updated_at)
@@ -207,15 +209,26 @@ export class MemoryStore {
       stateSweep: this.db.prepare('DELETE FROM user_state WHERE expires_at IS NOT NULL AND expires_at < ?'),
       stateCount: this.db.prepare('SELECT COUNT(*) AS n FROM user_state'),
     };
-    // FTS 索引回填：内容表有行而索引为空/少于内容（分词器迁移或崩溃残留）时全量重建。
+    // FTS 索引自愈：关键词索引必须与内容表逐行对应，两个方向都要修。
+    //  - 索引缺行（分词器迁移/崩溃残留/旧版本未同步删除）→ 全量重建；
+    //  - 索引多行（内容表已删除、索引残留的孤儿行）→ 精确删除孤儿行。孤儿行不仅
+    //    占位、让关键词检索拿到不存在的 rowid，若其 rowid 恰为内容表当前最大 rowid，
+    //    后续写入还会撞 memories_fts 主键（UNIQUE）导致该条记忆写入失败。
     if (this.fts) {
-      const memCount = this._stmt.count.get().n;
-      const ftsCount = this._stmt.ftsCount.get().n;
-      if (memCount > 0 && ftsCount < memCount) {
+      const memRowids = this._stmt.allRowids.all().map((r) => r.rowid);
+      const ftsRowids = this._stmt.ftsRowids.all().map((r) => r.rowid);
+      const memSet = new Set(memRowids);
+      const ftsSet = new Set(ftsRowids);
+      const missing = memRowids.filter((id) => !ftsSet.has(id));
+      if (missing.length > 0) {
         this.db.exec('DELETE FROM memories_fts');
         const fi = this.db.prepare('INSERT INTO memories_fts(rowid, content) VALUES (?, ?)');
         for (const row of this._stmt.scan.all()) {
           if (row.content) fi.run(row.rowid, row.content);
+        }
+      } else {
+        for (const rowid of ftsRowids) {
+          if (!memSet.has(rowid)) this._stmt.ftsDelete.run(rowid);
         }
       }
     }

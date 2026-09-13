@@ -1,9 +1,17 @@
 /**
  * 跨会话验证·会话A：向 archive profile 的真实记忆库写入种子记忆。
  * 与插件完全相同的代码路径（lib/core.js），dbPath 与 cordis.patch.yml 一致。
- * 用法：node scripts/seed-real.js
+ * 用法：node scripts/seed-real.js --live（写入真实库必须显式确认）
  */
 import { MemoryCore } from '../lib/core.js';
+
+// 安全护栏：本脚本写入项目「真实」记忆库，误跑会污染用户数据（实机已发生：批量跑
+// scripts 目录时被顺带执行）。必须显式确认才允许写入。
+if (!process.argv.includes('--live') && process.env.DSH_ARCHIVE_ALLOW_LIVE_WRITE !== '1') {
+  console.error('[已阻止] seed-real.js 会写入项目真实记忆库（用户数据）。');
+  console.error('确认要写入请加参数 --live，或设置环境变量 DSH_ARCHIVE_ALLOW_LIVE_WRITE=1。');
+  process.exit(1);
+}
 
 const core = new MemoryCore({
   dbPath: 'C:/DSH-ARCHIVE/dsh/data/memory.db',

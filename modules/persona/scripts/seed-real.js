@@ -1,5 +1,14 @@
 // 端到端验证：真实 persona.json 种入基础人格 → 注入渲染 → evolution 增补留档 → 回滚接口
+// 用法：node scripts/seed-real.js --live（写入真实人格文件必须显式确认）
 import { PersonaStore } from '../lib/persona-store.js';
+
+// 安全护栏：本脚本写入项目「真实」人格文件，误跑会污染用户数据（实机已发生：批量跑
+// scripts 目录时被顺带执行，真实人格被追加 4 条模板条目）。必须显式确认才允许写入。
+if (!process.argv.includes('--live') && process.env.DSH_ARCHIVE_ALLOW_LIVE_WRITE !== '1') {
+  console.error('[已阻止] seed-real.js 会写入项目真实人格文件（用户数据）。');
+  console.error('确认要写入请加参数 --live，或设置环境变量 DSH_ARCHIVE_ALLOW_LIVE_WRITE=1。');
+  process.exit(1);
+}
 
 const store = new PersonaStore({ path: 'C:/DSH-ARCHIVE/dsh/data/persona.json' });
 

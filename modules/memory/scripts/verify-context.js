@@ -1,7 +1,18 @@
 // 验证插件在真实 Loader 环境下的 apply：systemPrompt context 注册 + 快照注入文本
+// 数据来源：临时库（脚本自种画像与状态种子）。
+// 此前直连真实库并在其中写入"测试状态"——用户状态是单槽互斥，
+// 种入临时状态会把用户真实状态（如"睡眠中"）挤成已过期，自循环据此误判
+// "用户已醒"而提前离开睡眠期（实机已复现）。改为临时库后既不动真实数据，
+// 也不再依赖真实库是否已有画像/状态行。
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MemoryCore } from '../lib/core.js';
 
-const core = new MemoryCore({ dbPath: 'C:/DSH-ARCHIVE/dsh/data/memory.db' });
+const dir = mkdtempSync(join(tmpdir(), 'verify-memory-context-'));
+const dbPath = join(dir, 'memory.db');
+const core = new MemoryCore({ dbPath, defaultStateTtlSeconds: 14400 });
+core.profileSet({ key: 'language', content: '用户偏好简体中文交流', confidence: 0.9, source: 'user' });
 core.stateSet({ state: '测试状态', evidence: 'verify 用', ttlSeconds: 3600 }); // 种入临时状态
 
 const pluginUrl = 'file:///C:/DSH-ARCHIVE/dsh/node_modules/dsh-archive-memory/lib/index.js';
@@ -22,7 +33,7 @@ const ctx = {
 
 let exitCode = 1;
 try {
-  mod.apply(ctx, { dbPath: 'C:/DSH-ARCHIVE/dsh/data/memory.db', defaultStateTtlSeconds: 14400 });
+  mod.apply(ctx, { dbPath, defaultStateTtlSeconds: 14400 });
 
   const ctxReg = registeredContexts.find((c) => c.name === 'user-current-context');
   console.log('context registered:', Boolean(ctxReg), 'order:', ctxReg?.order);
@@ -40,8 +51,8 @@ try {
   for (const [n, ok] of checks) console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}`);
   exitCode = checks.every(([, ok]) => ok) ? 0 : 1;
 } finally {
-  // 保证真实库不留测试状态（即使 apply/断言中途抛错）
-  try { core.stateClear('测试状态'); } catch { /* ignore */ }
-  core.close();
+  // 临时库整体删除：真实库不写入、不留测试状态（即使 apply/断言中途抛错）
+  try { core.close(); } catch { /* ignore */ }
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 process.exit(exitCode);
