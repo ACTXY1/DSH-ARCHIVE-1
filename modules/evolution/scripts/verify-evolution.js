@@ -3,7 +3,7 @@
 // 人格通道：近 24h 对话打包（★重点标记、跨窗口排除）、当前人格清单含 id 注入、
 // YAML 严格子集解析（add/refine 归一）、refine 经 persona.update 应用、版本级回滚；
 // 自动建议（每日定时 / autoRun 通知 / 去重）；skill 写库与回滚。
-import { rmSync, existsSync, readFileSync } from 'node:fs';
+import { rmSync, existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -217,6 +217,38 @@ checks.push(['5 个工具注册', captured.tools.join(',') === 'evolution_sugges
 checks.push(['账本文件存在', existsSync(ledgerPath)]);
 checks.push(['LLM 调用全部按队列消费', queue.length === 0]);
 
+// =================：自动生成周期改每 3 天 + 候选超期（7 天未回应）自动拒绝并删除记录 =================
+// 用独立账本 + 独立实例验证（不动主流程的账本/LLM 队列）：
+//  - 周期锚点取账本中最近一次 by='auto' 的生成时间（重启不重置）：预置"1 天前"一次 → 下次应约 2 天后
+//  - 超期清理：8 天前的 pending 候选 → 自动拒绝并删除其全部记录；未超期的保留；已有终态记录的旧候选不动
+{
+  const dir2 = join(tmpdir(), `evo-expire-${process.pid}`);
+  rmSync(dir2, { recursive: true, force: true });
+  mkdirSync(dir2, { recursive: true });
+  const ledger2 = join(dir2, 'evolution.jsonl');
+  const nowMs = Date.now();
+  const writeRec = (rec) => appendFileSync(ledger2, JSON.stringify(rec) + '\n', 'utf8');
+  writeRec({ id: 'auto-old', at: nowMs - 86400000, type: 'suggest', candidate: { type: 'skill-create', name: 's', content: 'c' }, by: 'auto', status: 'pending' });
+  writeRec({ id: 'stale-1', at: nowMs - 8 * 86400000, type: 'suggest', candidate: { type: 'persona-add', section: 'traits', content: '超期候选（回归）' }, by: 'auto', status: 'pending' });
+  writeRec({ id: 'fresh-1', at: nowMs - 3600000, type: 'suggest', candidate: { type: 'persona-add', section: 'traits', content: '未超期候选（回归）' }, by: 'dream', status: 'pending' });
+  writeRec({ id: 'rejected-1', at: nowMs - 9 * 86400000, type: 'suggest', candidate: { type: 'persona-add', section: 'traits', content: '已拒绝候选（回归）' }, by: 'user', status: 'pending' });
+  writeRec({ id: 'rej-rec', at: nowMs - 9 * 86400000 + 1000, type: 'reject', candidateId: 'rejected-1', candidate: { type: 'persona-add', section: 'traits', content: '已拒绝候选（回归）' }, status: 'rejected', by: 'user' });
+  const api2 = mod.apply(ctx, { ledgerPath: ledger2, skillsDir: join(dir2, 'skills'), provider: 'x', model: 'y', maxConflict: 0.5, autoSuggest: true, autoHour: 22, autoNotify: false });
+  const st2 = api2.stats();
+  const nextIn = st2.auto.nextAutoAt - Date.now();
+  checks.push(['自动生成周期 3 天（锚点=账本上次自动生成，重启不重置）',
+    st2.auto.autoEveryDays === 3 && nextIn >= 1.5 * 86400000 && nextIn <= 3 * 86400000 + 3600000,
+    `everyDays=${st2.auto.autoEveryDays} nextIn=${(nextIn / 86400000).toFixed(2)}d`]);
+  checks.push(['stats.auto 暴露过期阈值（7 天）', st2.auto.expireAfterMs === 7 * 86400000]);
+  const exp = api2.expireStale();
+  const raw2 = readFileSync(ledger2, 'utf8');
+  checks.push(['超期未回应候选 → 自动拒绝并删除其记录', exp.expired === 1 && exp.removed >= 1 && !raw2.includes('stale-1'), JSON.stringify(exp)]);
+  checks.push(['未超期候选保留', raw2.includes('fresh-1')]);
+  checks.push(['已有终态（已拒绝）的旧候选不被清理', raw2.includes('rejected-1') && raw2.includes('rej-rec')]);
+  checks.push(['过期累计计数暴露给界面', (api2.stats().auto?.expiredTotal ?? 0) >= 1]);
+  rmSync(dir2, { recursive: true, force: true });
+}
+
 // =================  修复回归：YAML 解析器容错（行尾注释 / 块正文 # 行） =================
 // 实机形态：LLM 照抄 schema 示例的行尾注释（`- action: add  # add=新增条目` / `importance: 0.7  # 可选`），
 // 旧解析器把注释并入值 → action 恒等失败、条目被静默丢弃、人格通道整条无产出（修复见 persona-plan.js
@@ -334,7 +366,7 @@ try { await api.distillPersona(); } catch (error) { covErrText = String(error?.m
 checks.push(['覆盖失败重试后明确报错（含遗漏原条目 id）', covErrText.includes('遗漏原条目') && covErrText.includes('pers-entry-2'), covErrText]);
 checks.push(['凝练 LLM 队列消费完', queue.length === 0]);
 
-for (const [n, ok] of checks) console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}`);
+for (const [n, ok, extra] of checks) console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok || extra === undefined ? '' : ` :: ${String(extra).slice(0, 200)}`}`);
 console.log('--- 启动行 ---');
 console.log(stdout.split('\n').filter((l) => l.includes('[archive-evolution]')).join('\n'));
 rmSync(dir, { recursive: true, force: true });

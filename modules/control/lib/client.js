@@ -3076,7 +3076,10 @@ window.__ModuleLoader__.load({
             e(Card, { key: 'act', title: '✨ 自进化（用户授权制）', right: e(Btn, { label: busy ? '处理中…' : '触发建议', kind: 'primary', small: true, onClick: () => suggest() }) },
               e('p', { className: 'dim' }, '候选生成 → 隔离评估 → 安全门 → 必须由你显式批准才生效；任何候选均不自动采纳。'),
               stats?.auto?.enabled
-                ? e('p', { className: 'dim' }, `🤖 每日 ${String(stats.auto.autoHour).padStart(2, '0')}:00 自动生成候选并通知（人格←近24h对话+人格轨迹，模型产出 YAML 新增/修正方案；skill←对话/工作提炼），采纳仍需你批准。`)
+                ? e('p', { className: 'dim' }, `🤖 每 ${stats.auto.autoEveryDays ?? 3} 天 ${String(stats.auto.autoHour).padStart(2, '0')}:00 自动生成候选并通知（人格←近24h对话+人格轨迹，模型产出 YAML 新增/修正方案；skill←对话/工作提炼），采纳仍需你批准。`
+                  + ((stats.auto.expireAfterMs ?? 0) > 0
+                    ? `候选生成后 ${Math.round(stats.auto.expireAfterMs / 86400000)} 天未回应（批准或拒绝）将自动拒绝并从列表清理${(stats.auto.expiredTotal ?? 0) > 0 ? `（已清理 ${stats.auto.expiredTotal} 条）` : ''}。`
+                    : ''))
                 : null),
             e(Card, { key: 'list', title: '📋 候选列表', right: e('div', { style: { display: 'flex', gap: 4 } },
               ['all', 'pending', 'applied', 'rejected', 'rolled-back'].map((f) =>

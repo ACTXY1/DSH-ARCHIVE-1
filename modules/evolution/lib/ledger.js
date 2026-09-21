@@ -3,7 +3,7 @@
  * 每次记录含完整候选与前后对比——满足"每次进化留档"；回滚接口据此恢复。
  */
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export const EVOLUTION_STATUS = ['pending', 'applied', 'rejected', 'rolled-back', 'failed'];
@@ -54,5 +54,33 @@ export class EvolutionLedger {
     const records = this.candidate(candidateId, 100).filter((r) => r.type !== 'suggest');
     const status = records[0]?.status;
     return status ?? 'pending';
+  }
+
+  /**
+   *  用户需求：候选过期（超期未回应）时**自动拒绝并删除该条目的全部记录**。
+   * 账本本是追加式，唯有这条清理路径需要真正移除记录——原子重写（tmp + rename），
+   * 只删指定候选的记录，其余逐字符保留。
+   * @param {string[]} ids 待删除的候选 id（suggest 记录的 id，亦即 candidateId）
+   * @returns {number} 实际删除的记录条数
+   */
+  removeCandidates(ids) {
+    const set = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && x !== ''));
+    if (set.size === 0 || !existsSync(this.path)) return 0;
+    const lines = readFileSync(this.path, 'utf8').split('\n').filter(Boolean);
+    const kept = [];
+    let removed = 0;
+    for (const line of lines) {
+      let rec = null;
+      try { rec = JSON.parse(line); } catch { kept.push(line); continue; } // 坏行原样保留
+      const cid = rec?.candidateId ?? rec?.candidate?.id ?? (rec?.type === 'suggest' ? rec.id : undefined);
+      if (cid !== undefined && set.has(cid)) { removed++; continue; }
+      kept.push(line);
+    }
+    if (removed > 0) {
+      const tmp = `${this.path}.tmp-${process.pid}`;
+      writeFileSync(tmp, kept.length > 0 ? kept.join('\n') + '\n' : '', 'utf8');
+      renameSync(tmp, this.path);
+    }
+    return removed;
   }
 }

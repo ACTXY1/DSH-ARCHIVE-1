@@ -99,8 +99,11 @@
 #  - 候选生成→隔离评估→安全门→用户授权采纳/拒绝/回滚（不自动生效）
 #  - 进化对象：虚拟人格（ctx.persona by='evolution'）+ 技能（data/skills 技能库）
 #  - 每次进化留档：data/evolution.jsonl 追加式账本
-#  - 自动建议：每日 autoHour 自动生成候选（by='auto'，仅候选+评估+留档，不自动采纳），
-#    生成 ≥1 条新候选时经 notify 主动告知；人格←对话总结（persona 六维度），skill←对话/工作提炼
+#  - 自动建议（； 周期改为每 3 天）：每 autoEveryDays 天的 autoHour 自动生成候选
+#    （by='auto'，仅候选+评估+留档，不自动采纳），生成 ≥1 条新候选时经 notify 主动告知；
+#    人格←对话总结（persona 六维度），skill←对话/工作提炼
+#  - 候选过期清理（ 用户需求）：生成后 autoRejectAfterMs（默认 7 天）内用户未回应
+#    （批准或拒绝）→ 自动拒绝并删除该条目记录（不再长期占据待审批列表）
 - insert:
     - id: archive-evolution
       name: dsh-archive-evolution
@@ -112,6 +115,8 @@
         maxConflict: 0.5
         autoSuggest: true
         autoHour: 22
+        autoEveryDays: 3
+        autoRejectAfterMs: 604800000
         autoNotify: true
 
 #  主动消息通道（dsh-archive-notify）：控制台 + notifications.jsonl 流水

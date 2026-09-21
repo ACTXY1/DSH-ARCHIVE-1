@@ -10,4 +10,8 @@
         maxConflict: 0.5
         autoSuggest: true
         autoHour: 22
+        #：自动生成周期改为每 3 天（此前每日 1 次）
+        autoEveryDays: 3
+        #：生成后 7 天未回应（批准/拒绝）→ 自动拒绝并删除该条目记录（0=关闭）
+        autoRejectAfterMs: 604800000
         autoNotify: true

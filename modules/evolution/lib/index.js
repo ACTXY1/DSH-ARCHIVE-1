@@ -14,9 +14,12 @@
  *   reject()    → 账本 rejected
  *   rollback()  → 用户自选回滚：persona 恢复采纳前版本；skill 恢复旧内容（rolled-back）
  *
- * 自动建议（ 用户需求"定期提供进化候选"接线）：
- *   autoSuggest=true 时每日 autoHour（默认 22:00）自动 suggest（by='auto'，仅生成候选+隔离评估+留档，
- *   绝不自动采纳），生成 ≥1 条新候选时经 notify 主动告知。
+ * 自动建议（ 用户需求"定期提供进化候选"接线； 改为每 3 天）：
+ *   autoSuggest=true 时每 autoEveryDays（默认 3 天）的 autoHour（默认 22:00）自动 suggest
+ *   （by='auto'，仅生成候选+隔离评估+留档，绝不自动采纳），生成 ≥1 条新候选时经 notify 主动告知；
+ *   周期锚点取账本中最近一次自动生成时间（重启不重置）。
+ * 候选过期清理（ 用户需求）：生成后 autoRejectAfterMs（默认 7 天）内用户未回应
+ *   （批准或拒绝）的候选，自动拒绝并**删除该条目的记录**（不再长期占据待审批列表）。
  * 人格更新方案独立通道（ 用户需求）：suggest 拆分两次独立 LLM 调用——
  *   - 人格通道：近 24h 对话记录（★重点标记用户对 AI 的要求/建议/期望/纠正）+ 人格发展轨迹
  *     （当前人格清单（含条目 id）+ 已采纳进化方向 + 一致性近期回复轨迹）→ 模型分析用户想要的
@@ -63,7 +66,10 @@ const DEFAULTS = {
   model: 'deepseek-v4-flash',
   maxConflict: 0.5,
   autoSuggest: false,
-  autoHour: 22, // 每日自动生成候选时刻（0-23； 用户确认每日 1 次）
+  autoHour: 22, // 自动生成候选的时刻（0-23；配合 autoEveryDays 决定每几天跑一次）
+  autoEveryDays: 3, //  用户指定：自动生成周期（天），此前为每日 1 次
+  autoRejectAfterMs: 7 * 86400000, //  用户需求：生成后 7 天未回应（批准/拒绝）→ 自动拒绝并删除该条目记录（0=关闭）
+  expireCheckMs: 3600000, // 过期清理检查间隔（默认 1 小时）
   autoNotify: true, // 自动生成 ≥1 条新候选后经 notify 主动告知
 };
 
@@ -77,6 +83,19 @@ function normalizeConfig(raw = {}) {
   if (raw.autoHour !== undefined) {
     if (!Number.isInteger(raw.autoHour) || raw.autoHour < 0 || raw.autoHour > 23) throw new Error('archive-evolution 配置错误：autoHour 必须是 0-23 的整数');
     cfg.autoHour = raw.autoHour;
+  }
+  if (raw.autoEveryDays !== undefined) {
+    if (!Number.isInteger(raw.autoEveryDays) || raw.autoEveryDays < 1) throw new Error('archive-evolution 配置错误：autoEveryDays 必须是 ≥1 的整数（天）');
+    cfg.autoEveryDays = raw.autoEveryDays;
+  }
+  // 过期自动清理：允许 0（=关闭该功能）
+  if (raw.autoRejectAfterMs !== undefined) {
+    if (!Number.isFinite(raw.autoRejectAfterMs) || raw.autoRejectAfterMs < 0) throw new Error('archive-evolution 配置错误：autoRejectAfterMs 必须是非负数（0=关闭自动清理）');
+    cfg.autoRejectAfterMs = Math.floor(raw.autoRejectAfterMs);
+  }
+  if (raw.expireCheckMs !== undefined) {
+    if (!Number.isFinite(raw.expireCheckMs) || raw.expireCheckMs < 60000) throw new Error('archive-evolution 配置错误：expireCheckMs 必须 ≥60000ms');
+    cfg.expireCheckMs = Math.floor(raw.expireCheckMs);
   }
   if (raw.provider !== undefined && typeof raw.provider === 'string') cfg.provider = raw.provider;
   if (raw.model !== undefined && typeof raw.model === 'string') cfg.model = raw.model;
@@ -760,11 +779,35 @@ export function apply(ctx, rawConfig) {
   ctx.provide('evolution', api);
 
   // ================= 自动建议（ 用户需求"定期提供进化候选"） =================
-  // 每日 autoHour 自动 suggest（by='auto'）：仅生成候选 + 隔离评估 + 留档 pending，绝不自动采纳；
-  // 生成 ≥1 条新候选时经 notify 主动告知（用户确认：主动通知）。手动 suggest 与自动并存。
-  const autoState = { enabled: config.autoSuggest, autoHour: config.autoHour, autoNotify: config.autoNotify, lastAutoAt: 0, nextAutoAt: 0, autoTotal: 0, lastError: null };
+  // 每 autoEveryDays（ 用户指定：3 天）的 autoHour 自动 suggest（by='auto'）：仅生成候选 +
+  // 隔离评估 + 留档 pending，绝不自动采纳；生成 ≥1 条新候选时经 notify 主动告知。
+  // 周期以**账本中最近一次 by='auto' 的 suggest 时间为准**（重启后仍生效，无需额外持久化）。
+  const autoState = { enabled: config.autoSuggest, autoHour: config.autoHour, autoEveryDays: config.autoEveryDays, autoNotify: config.autoNotify, lastAutoAt: 0, nextAutoAt: 0, autoTotal: 0, lastError: null, expiredTotal: 0, lastExpireAt: 0, expireAfterMs: config.autoRejectAfterMs };
   let nextAutoAt = 0;
   let autoRunning = false;
+
+  /** 账本中最近一次自动生成（by='auto'）的时间；无则 0。
+   *  注意：账本 all() 按**写入顺序**返回（非按 at 排序），故此处取最大 at 而非首条命中。 */
+  function lastAutoSuggestAt() {
+    let latest = 0;
+    try {
+      for (const rec of ledger.all(5000)) {
+        if (rec?.type === 'suggest' && rec?.by === 'auto') {
+          const at = Number(rec.at);
+          if (at > latest) latest = at;
+        }
+      }
+    } catch { /* 账本不可读则按未跑过处理 */ }
+    return latest;
+  }
+
+  /** 时间戳之后（含当天）首个 autoHour 整点。 */
+  function nextHourAtOrAfter(ts, hour) {
+    const d = new Date(ts);
+    d.setHours(hour, 0, 0, 0);
+    if (d.getTime() < ts) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
 
   /** 手动触发一次自动流程（供 verify/总控/调试）；与定时器共用同一路径。 */
   async function runAutoSuggest() {
@@ -772,9 +815,9 @@ export function apply(ctx, rawConfig) {
     if (autoRunning) return { skipped: true, reason: '自动流程进行中' };
     if (autoState.lastAutoAt > 0 && Date.now() - autoState.lastAutoAt < 3600000) return { skipped: true, reason: '距上次自动生成不足 1 小时' };
     autoRunning = true;
+    autoState.lastAutoAt = Date.now(); //：以"尝试时间"为周期锚点（无新候选的轮次也不再次日重试）
     try {
       const res = await api.suggest({ by: 'auto' });
-      autoState.lastAutoAt = Date.now();
       autoState.autoTotal++;
       autoState.lastError = null;
       const passed = res.results.filter((r) => r.decision?.passed).length;
@@ -805,23 +848,84 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  /** 递归安排下一次自动生成（进程内每日定时；重启后重新计算，无需持久化）。 */
+  /**
+   *  用户需求：生成后 autoRejectAfterMs（默认 7 天）内用户未回应（批准或拒绝）的候选，
+   * **自动拒绝并删除该条目的记录**——不再长期占据待审批列表，也无需逐条手动清理。
+   * 仅清理"仍为 pending"的候选（已采纳/已拒绝/已回滚/失败的候选各自有终态记录，不动）。
+   * 删除会移除该候选在账本中的全部记录（拒绝本身即"此条作废"，不留半条记录）。
+   * 幂等：每次只处理当时超期的候选；无超期时零副作用。
+   * @returns {{expired:number, removed:number}}
+   */
+  function expireStaleCandidates() {
+    if (!(config.autoRejectAfterMs > 0)) return { expired: 0, removed: 0 };
+    const now = Date.now();
+    const suggests = new Map(); // candidateId → 生成时间
+    const terminal = new Set();
+    try {
+      for (const rec of ledger.all(5000)) {
+        if (rec?.type === 'suggest' && typeof rec.id === 'string') {
+          if (!suggests.has(rec.id)) suggests.set(rec.id, Number(rec.at) || 0);
+        } else if (['approve', 'reject', 'rollback', 'fail', 'auto-apply'].includes(rec?.type) && typeof rec?.candidateId === 'string') {
+          terminal.add(rec.candidateId);
+        }
+      }
+    } catch (error) {
+      logger.warn(`archive-evolution: 过期候选扫描失败：${error?.message ?? error}`);
+      return { expired: 0, removed: 0 };
+    }
+    const stale = [];
+    for (const [cid, at] of suggests) {
+      if (terminal.has(cid)) continue;
+      if (at > 0 && now - at >= config.autoRejectAfterMs) stale.push(cid);
+    }
+    if (stale.length === 0) return { expired: 0, removed: 0 };
+    let removed = 0;
+    try {
+      removed = ledger.removeCandidates(stale);
+    } catch (error) {
+      logger.warn(`archive-evolution: 过期候选清理失败：${error?.message ?? error}`);
+      return { expired: 0, removed: 0 };
+    }
+    const days = Math.round(config.autoRejectAfterMs / 86400000);
+    autoState.expiredTotal += stale.length;
+    autoState.lastExpireAt = now;
+    bootLine(`[archive-evolution] 候选过期清理：${stale.length} 条生成后超过 ${days} 天未回应 → 已自动拒绝并删除记录（移除账本记录 ${removed} 条）`);
+    if (config.autoNotify) {
+      const notify = ctx.get('notify');
+      if (notify !== undefined) {
+        try {
+          notify.send({ content: `🧬 自进化：${stale.length} 条候选超过 ${days} 天未回应，已自动拒绝并从待审批列表清理（如需保留意见，可在下次自动生成后及时审阅）。`, source: 'evolution', scope: 'panel' });
+        } catch { /* 通知失败不阻断清理 */ }
+      }
+    }
+    return { expired: stale.length, removed };
+  }
+
+  /** 递归安排下一次自动生成（进程内定时；触发点=账本上次自动生成 + autoEveryDays，重启后重算）。 */
   function scheduleNextAuto() {
     if (!config.autoSuggest) return;
-    const now = new Date();
-    const next = new Date(now);
-    next.setHours(config.autoHour, 0, 0, 0);
-    if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
-    nextAutoAt = next.getTime();
-    const delay = Math.max(1000, nextAutoAt - now.getTime());
+    const now = Date.now();
+    // 周期锚点取"账本中最近一次自动生成"与"本进程最近一次尝试"的更晚者：
+    // 前者保证重启后周期不重置，后者保证"无新候选/失败"的轮次也按周期推进（不再次日重试）。
+    const lastAt = Math.max(lastAutoSuggestAt(), Number(autoState.lastAutoAt) || 0);
+    if (lastAt > 0) autoState.lastAutoAt = lastAt;
+    const periodMs = Math.max(1, config.autoEveryDays) * 86400000;
+    const earliest = lastAt > 0 ? Math.max(now, lastAt + periodMs) : now;
+    nextAutoAt = nextHourAtOrAfter(earliest, config.autoHour);
+    autoState.nextAutoAt = nextAutoAt;
+    const delay = Math.max(1000, nextAutoAt - now);
     ctx.timer.setTimeout(() => {
       void runAutoSuggest();
       scheduleNextAuto();
     }, delay);
-    bootLine(`[archive-evolution] 自动候选已启用：每日 ${String(config.autoHour).padStart(2, '0')}:00，下次 ${next.toLocaleString()}`);
+    bootLine(`[archive-evolution] 自动候选已启用：每 ${config.autoEveryDays} 天 ${String(config.autoHour).padStart(2, '0')}:00，下次 ${new Date(nextAutoAt).toLocaleString()}${config.autoRejectAfterMs > 0 ? `；候选 ${Math.round(config.autoRejectAfterMs / 86400000)} 天未回应将自动拒绝并清理` : ''}`);
   }
 
   scheduleNextAuto();
+  //：过期待审批候选的定期清理（启动后 60s 首扫 + 每 expireCheckMs 一次）
+  ctx.timer.setTimeout(() => { try { expireStaleCandidates(); } catch { /* 单次失败不影响后续 */ } }, 60000);
+  ctx.timer.setInterval(() => { try { expireStaleCandidates(); } catch { /* 单次失败不影响后续 */ } }, config.expireCheckMs);
+  api.expireStale = expireStaleCandidates;
   api.autoRun = runAutoSuggest;
 
   const tools = ctx.get('tools');

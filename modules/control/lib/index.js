@@ -516,7 +516,7 @@ export function apply(ctx, rawConfig) {
     'evolution.view': (a) => ctx.evolution.view(a.limit),
     'evolution.stats': () => ctx.evolution.stats(),
     'evolution.suggest': async (a) => {
-      //  手动触发成功且产出候选 → 铃铛通知（与每日 22:00 自动候选同款文案/通道）。
+      //  手动触发成功且产出候选 → 铃铛通知（与自动候选同款文案/通道）。
       // 仅 UI 手动路径走本 OPS；agent 工具 evolution_suggest 直调服务层，不在此重复打扰。
       const res = await ctx.evolution.suggest({ by: a.by ?? 'user' });
       const n = (res?.candidateIds ?? []).length;
