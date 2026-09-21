@@ -658,14 +658,39 @@ window.__ModuleLoader__.load({
         } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
       }
       /**
-       *  斜杠命令通道用到的客户端 remote 服务。该服务由 `@deepseek-ai/dsh-api-gateway`
-       * 的客户端半部提供（`super(ctx, "remote")`），`commands.list` / `commands.execute` 由 Typert
-       * 远程代理挂在上面的 commands 命名空间；`modules/control/package.json` 的 `dsh.client.inject`
-       * 已声明依赖 dsh-client-runtime，宿主装配客户端模块表时会先把这条链加载好。
-       * 惰性获取、不写进插件 inject：若声明为硬依赖而 remote 未能就绪，整个专属界面会进入等待
-       * 而不渲染；取不到时命令通道自动降级为"按普通消息发送"，界面其余部分完全不受影响。
+       *  斜杠命令通道的服务引用（`commands.list` / `commands.execute`）。
+       * 该服务由 `@deepseek-ai/dsh-api-gateway` 的客户端半部提供，命令方法挂在 Typert 的
+       * `remote.commands` 命名空间下。
+       * 实测教训（ 实机 BUG）：`remote` 是**受限访问器**，未声明 inject 的上下文直接读
+       * `remote.commands` 会抛 `cannot get property "remote.commands" without inject`；该异常曾从
+       * 命令分支冒泡到发送流程（`sendText` 的 promise 被拒绝而调用方没有 catch），表现为
+       * "点发送或按回车完全无反应"（普通消息不受影响）。
+       * 而把 `remote.commands` 直接写进插件 inject 又会让整个界面在服务缺失时进入等待，
+       * 因此改用 `ctx.inject` 做**可选捕获**：服务就绪时拿到引用，缺失时命令通道自动不可用，
+       * 界面照常渲染、输入照常按普通消息发送。
        */
-      const getRemote = () => { try { return ctx.get('remote'); } catch { return undefined; } };
+      let remoteCommands;
+      try {
+        ctx.inject(['remote.commands'], (injectedCtx) => {
+          try { remoteCommands = injectedCtx.get('remote.commands') ?? undefined; } catch { remoteCommands = undefined; }
+          if (remoteCommands === undefined) {
+            // 兼容写法：命令命名空间也可能挂在 remote 服务对象上（受限访问器在无权限时抛错，已捕获）
+            try {
+              const remote = injectedCtx.get('remote');
+              if (remote && typeof remote.commands === 'object' && remote.commands !== null) remoteCommands = remote.commands;
+            } catch { /* 保持不可用 */ }
+          }
+        });
+      } catch { remoteCommands = undefined; }
+      /** 命令服务引用；未就绪或不可用时返回 undefined，调用方据此回退普通消息。 */
+      const getRemoteCommands = () => (remoteCommands && typeof remoteCommands.execute === 'function' ? remoteCommands : undefined);
+      /** 给远程调用加超时：通道无响应时不至于让发送流程与"发送"按钮永久卡住。 */
+      function withTimeout(promise, ms, label) {
+        return Promise.race([
+          promise,
+          new Promise((_, reject) => { setTimeout(() => reject(new Error(`${label}超时`)), ms); }),
+        ]);
+      }
       /**
        *  `/export` 的浏览器侧动作。
        * 官方 dsh-session-log-export 的宿主命令只回一句 "Session log download requested."，真正的下载由
@@ -834,7 +859,8 @@ window.__ModuleLoader__.load({
        */
       const ChatComposer = React.memo(function ChatComposer({ onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage, cmdBusy }) {
         const [draft, setDraft] = useState('');
-        const submit = () => { void sendText(draft).then((ok) => { if (ok) setDraft(''); }); };
+        // 发送流程的任何异常都必须有落点：曾经一次未捕获的拒绝会让"点发送/回车"完全无反应
+        const submit = () => { void sendText(draft).then((ok) => { if (ok) setDraft(''); }).catch(() => {}); };
         //：命令执行期间只拦"命令提交"——长命令（如 /compact）要在宿主侧跑到完成，
         // 重复提交会重复执行；而普通消息不受影响，用户仍可正常对话。
         const draftIsCommand = draft.trim().startsWith('/');
@@ -1070,8 +1096,9 @@ window.__ModuleLoader__.load({
           if (!sid) return false;
           const name = (String(line).match(/^\/([A-Za-z0-9_-]{1,40})/) || [])[1];
           if (!name) return false;
-          const remote = typeof getRemote === 'function' ? getRemote() : undefined;
-          const commands = remote && remote.commands;
+          // 通道探测本身也包一层：任何异常只表示"通道不可用"，绝不冒泡到发送流程
+          let commands;
+          try { commands = typeof getRemoteCommands === 'function' ? getRemoteCommands() : undefined; } catch { commands = undefined; }
           if (!commands || typeof commands.execute !== 'function') return false; // 命令通道不可用 → 原行为
           // 串行护栏：上一条命令仍在执行时吞掉本次输入并提示，避免长命令被并发执行两次
           // （护栏 90s：远端若一直不返回也自动解锁，不让输入被永久挡住）。
@@ -1086,17 +1113,18 @@ window.__ModuleLoader__.load({
             if (!catalog || Date.now() - catalog.at > 30000) {
               const next = { at: Date.now(), names: [] };
               try {
-                const lr = normResult(await commands.list(sid));
+                const lr = normResult(await withTimeout(commands.list(sid), 8000, '命令目录请求'));
                 if (lr.ok === true && Array.isArray(lr.value)) {
                   next.names = lr.value.map((c) => String((c && c.name) ?? '')).filter(Boolean);
                 }
-              } catch { /* 目录不可用：names 留空，交给 execute 判定 */ }
+              } catch { /* 目录不可用/超时：names 留空，交给 execute 判定 */ }
               catalog = next;
               cmdCatalogRef.current = catalog;
             }
             const known = catalog.names.length === 0 || catalog.names.includes(name);
             if (!known) return false; // 宿主注册表里没有这个命令 → 当作普通消息（例如用户就想发 "/etc/hosts"）
-            const res = normResult(await commands.execute(sid, String(line), []));
+            // 执行超时 120s：`/compact` 会在宿主侧跑到压缩完成（可能数十秒），但绝不允许无限挂起
+            const res = normResult(await withTimeout(commands.execute(sid, String(line), []), 120000, '命令执行'));
             if (res.ok !== true) { showToast(`命令执行失败：${res.error || '传输错误'}`); return true; }
             if (res.value === undefined) {
               // 目录未知（未能取到）且宿主也未识别 → 保守回退，不打扰用户
@@ -1852,7 +1880,10 @@ window.__ModuleLoader__.load({
               showToast('上一条命令仍在执行，请稍候再发');
               return false;
             }
-            const ran = await runSlashCommand(t, sid);
+            // 命令通道的任何异常都不得吞掉用户的输入：catch 后继续走下面的普通消息路径
+            let ran = false;
+            try { ran = await runSlashCommand(t, sid); }
+            catch (error) { showToast(`命令通道异常，已按普通消息发送：${String((error && error.message) || error)}`); }
             if (ran) {
               stickRef.current = true;
               // 命令不产生 user/message 事件（会话里的「⌘ /命令」与结果来自 command/run、command/done），
@@ -4301,7 +4332,7 @@ window.__ModuleLoader__.load({
       }
 
       // ===== 注册：整体替换 root（priority -100 shadow 出厂 z5） =====
-      slots.inject('root', () => slots.register({ name: 'root', id: 'archive-ui-root', priority: -100 }, () => e(App, { getRemote })));
+      slots.inject('root', () => slots.register({ name: 'root', id: 'archive-ui-root', priority: -100 }, () => e(App, { getRemote: getRemoteCommands })));
       try { if (typeof document !== 'undefined' && document.body) document.body.setAttribute('data-arc-ui', 'ready'); } catch { /* ignore */ }
       // 原生设置页中的面板占位（root 替换后不可见，保留无害）
       slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'archive-control', order: 1000, label: '智能体总控' }, () => e('div', null, '智能体总控已内置于全新主界面')));
