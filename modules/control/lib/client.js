@@ -2681,6 +2681,8 @@ window.__ModuleLoader__.load({
               { k: '循环次数', v: stats?.cycleCount ?? 0 },
               { k: '失败次数', v: stats?.errorCount ?? 0 },
               { k: '中止次数', v: stats?.cancelledCount ?? 0 },
+              //：空转留档节流（不发言不行动的轮次按 1 小时节流写记忆，省库容量）
+              { k: '空转留档节流', v: (stats?.config?.noopRecordIntervalMs ?? 0) > 0 ? `${stats?.noopSkipped ?? 0} 轮（间隔 ${Math.round((stats.config.noopRecordIntervalMs ?? 3600000) / 60000)} 分钟）` : '已关闭（每轮全量留档）' },
               { k: '上次循环', v: fmtTime(stats?.lastCycleAt) },
               { k: '上次决策', v: fmtTime(stats?.lastDecisionAt) },
               { k: '今日行动', v: guards.dayActions ?? 0 },
@@ -2689,7 +2691,11 @@ window.__ModuleLoader__.load({
             ] }),
             e(Card, { key: 'cfg', title: '⚙️ 运行配置', right: e(Btn, { label: '保存配置', kind: 'primary', small: true, onClick: () => void saveConfig() }) },
               e(Row, { k: '兜底间隔 (ms)', v: intervalMs }),
-              e(Row, { k: '当前生效间隔', v: `${Math.round((stats?.config?.effectiveFallbackMs ?? 300000) / 60000)} 分钟${stats?.config?.reducedMode ? '（降频模式，总控可关闭）' : ''}` }),
+              e(Row, { k: '当前生效间隔', v: `${Math.round((stats?.config?.effectiveFallbackMs ?? 600000) / 60000)} 分钟${stats?.config?.reducedMode ? '（降频模式，总控可关闭）' : ''}` }),
+              //：模型调用冷却（未配置密钥 / 账户余额·额度不足）——此前只存在于 stats，界面看不到
+              e(Row, { k: '模型调用冷却', v: (stats?.credentialCooldownLeftMs ?? 0) > 0
+                ? `剩 ${fmtDur(stats.credentialCooldownLeftMs)}（原因：${stats?.cooldownReason === 'quota' ? '账户余额/额度不足，充值后自动恢复' : stats?.cooldownReason === 'credential' ? '未配置模型密钥，配置后自动恢复' : '未知'}）`
+                : '无' }),
               e(Row, { k: '单次决策 token 预算', v: `${stats?.config?.maxTokens ?? 10000}${maxTokens.trim() !== '' && Number(maxTokens) !== (stats?.config?.maxTokens ?? 10000) ? '（未保存）' : ''}` }),
               e(Row, { k: '用户消息后静默 (s)', v: `${Math.round((stats?.config?.quietAfterUserMs ?? 60000) / 1000)} 秒（对话让路窗：用户消息/回合后短暂暂停时间驱动循环；防串线靠对话上下文注入，窗口仅兜底）` }),
               e(Row, { k: '对话前置思考时限', v: `${Math.round((stats?.config?.preTurnCapMs ?? 120000) / 1000)} 秒${preCap.trim() !== '' && Number(preCap) !== (stats?.config?.preTurnCapMs ?? 120000) ? '（未保存）' : ''}` }),
@@ -2699,7 +2705,7 @@ window.__ModuleLoader__.load({
                 e('button', { className: `arc-btn small${stats?.config?.dualAgent === true ? ' danger' : ' primary'}`, onClick: () => void toggleDualLoop() }, stats?.config?.dualAgent === true ? '关闭（恢复单流程）' : '开启'),
                 e('span', { className: 'arc-hint', style: { fontSize: 11 } }, stats?.config?.dualAgent === true ? '开启中：记忆先由 agent1 按 recent/语义概括，决策读概括，输出前审查（通顺/行动合理/不重复/符合人设/用户指令）；可配合「思维预设」注入你的指令' : '默认关=与旧流程一致；开启会略增耗时与 token')),
               e('div', { className: 'arc-text' }, '直接编辑下方数值并保存（全部运行时生效，无需重启）：'),
-              e('input', { className: 'arc-text', value: intervalMs, onChange: (ev) => setIntervalMs(ev.target.value), placeholder: '如 300000（5 分钟）' }),
+              e('input', { className: 'arc-text', value: intervalMs, onChange: (ev) => setIntervalMs(ev.target.value), placeholder: '如 600000（10 分钟，默认）' }),
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: maxTokens, onChange: (ev) => setMaxTokens(ev.target.value), placeholder: `如 10000（deepseek-v4-flash 推理模型，reasoning 会占用预算，过小致正文截断→循环失败）` }),
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: preCap, onChange: (ev) => setPreCap(ev.target.value), placeholder: `如 120000（120 秒；限 ${PRE_CAP_MIN / 1000} 秒 ~ ${PRE_CAP_MAX / 60000} 分钟，乱填超大值会致每回合思考瞬间被砍）` }),
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: preTok, onChange: (ev) => setPreTok(ev.target.value), placeholder: `如 4000（越小完成越快；限 ${PRE_TOK_MIN} ~ ${PRE_TOK_MAX}）` }),
@@ -3108,6 +3114,16 @@ window.__ModuleLoader__.load({
                 : '已关闭：睡眠期不运行梦境引擎（可手动触发下方「跑一次梦境」）。'),
               sub?.whisper
                 ? e('div', { className: 't2', style: { marginTop: 4 } }, e('span', { className: 'arc-note', style: { color: 'var(--arc-faint)' } }, `🫧 最近呓语（${fmtTime(sub.whisper.at)}${sub.whisper.consumed ? ' · 已注入' : ' · 待注入'}）：${sub.whisper.text}`))
+                : null,
+              //：梦境引擎的失败此前完全不可见（失败只走 logger.warn，不落日志、不上界面）——
+              // 实机 phi3:mini 模型库不完整导致凝缩全 404、潜记忆池停更数日无人察觉。现直接展示。
+              sub?.lastRun
+                ? e('div', { className: 't2', style: { marginTop: 4 } }, e('span', { className: 'arc-note', style: { color: 'var(--arc-faint)' } },
+                    `🌙 最近一轮（${fmtTime(sub.lastRun.at)}）：凝缩 +${sub.lastRun.condensed} · 碰撞成功 ${Math.max(0, (sub.lastRun.tried ?? 0) - (sub.lastRun.failed ?? 0))}/${sub.lastRun.tried ?? 0} · 高优先 ${sub.lastRun.high ?? 0} · 自动微调 ${sub.lastRun.auto ?? 0}`))
+                : null,
+              sub?.lastError
+                ? e('div', { className: 't2', style: { marginTop: 4 } }, e('span', { className: 'arc-note', style: { color: 'var(--arc-warn)' } },
+                    `⚠️ 最近失败（${sub.lastError.phase} · ${fmtTime(sub.lastError.at)}）：${truncate(sub.lastError.message, 140)}`))
                 : null,
               e('div', { className: 't2', style: { gap: 8, flexWrap: 'wrap', marginTop: 8 } },
                 e(Badge, { text: sub?.autoApply ? '自动微调：开（自洽>95 自动执行 persona）' : '自动微调：关（所有草案需人工审批）', tone: sub?.autoApply ? 'warn' : 'dim' }),

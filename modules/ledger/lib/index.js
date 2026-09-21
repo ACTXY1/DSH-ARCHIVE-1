@@ -48,8 +48,11 @@ const DEFAULTS = {
   dataPath: join(process.cwd(), 'data', 'ledger'),
   promptCap: 400,
   errorCap: 400,
-  fileLineCap: 15000,
-  fileTrimTo: 8000,
+  //  容量治理：原为 15000/8000 且**只在启动时裁剪**——长时间运行的实例会无界增长
+  // （实机 18 天 6059 条 = 59MB，约 5MB/天；单条均 ~9.7KB，主要是循环系统提示词）。
+  // 现收紧为 3000/1500 并增加"落盘增量就地裁剪"（见 flushFiles），稳态上限约 30MB。
+  fileLineCap: 3000,
+  fileTrimTo: 1500,
   flushMs: 1500,
 };
 
@@ -163,16 +166,23 @@ export function apply(ctx, rawConfig) {
   const promptFile = join(cfg.dataPath, 'prompts.jsonl');
   const errorFile = join(cfg.dataPath, 'errors.jsonl');
 
-  /** 启动裁剪：文件超过 fileLineCap 行时保留尾部 fileTrimTo 行。 */
+  /**
+   * 裁剪：文件超过 fileLineCap 行时保留尾部 fileTrimTo 行，返回裁剪后的行数。
+   *：由"仅启动裁剪"改为启动 + 落盘增量触发（见 flushFiles）——长跑实例不再无界增长。
+   */
   const trimFile = (file) => {
     try {
-      if (!existsSync(file)) return;
+      if (!existsSync(file)) return 0;
       const raw = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-      if (raw.length > cfg.fileLineCap) writeFileSync(file, raw.slice(-cfg.fileTrimTo).join('\n') + '\n', 'utf8');
-    } catch { /* 裁剪失败不阻断 */ }
+      if (raw.length > cfg.fileLineCap) {
+        writeFileSync(file, raw.slice(-cfg.fileTrimTo).join('\n') + '\n', 'utf8');
+        return cfg.fileTrimTo;
+      }
+      return raw.length;
+    } catch { return 0; }
   };
-  trimFile(promptFile);
-  trimFile(errorFile);
+  let promptLines = trimFile(promptFile);
+  let errorLines = trimFile(errorFile);
 
   const prompts = [];   // 内存环形（最新在后）
   const errors = [];
@@ -190,8 +200,17 @@ export function apply(ctx, rawConfig) {
     if (flushing) return;
     flushing = true;
     try {
-      if (queuedPrompt.length > 0) appendFileSync(promptFile, queuedPrompt.join('\n') + '\n', 'utf8');
-      if (queuedError.length > 0) appendFileSync(errorFile, queuedError.join('\n') + '\n', 'utf8');
+      if (queuedPrompt.length > 0) {
+        appendFileSync(promptFile, queuedPrompt.join('\n') + '\n', 'utf8');
+        //：落盘增量就地裁剪（增量为 0 时不读文件，开销为零）
+        promptLines += queuedPrompt.length;
+        if (promptLines > cfg.fileLineCap) promptLines = trimFile(promptFile);
+      }
+      if (queuedError.length > 0) {
+        appendFileSync(errorFile, queuedError.join('\n') + '\n', 'utf8');
+        errorLines += queuedError.length;
+        if (errorLines > cfg.fileLineCap) errorLines = trimFile(errorFile);
+      }
     } catch { /* 落盘失败（磁盘满等）不阻断业务 */ }
     queuedPrompt.length = 0;
     queuedError.length = 0;

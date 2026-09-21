@@ -48,7 +48,7 @@
         injectEnabled: true
 
 #  自循环思考驱动器（dsh-archive-loop，源码：C:/DSH-ARCHIVE\modules\loop）
-#  - 事件触发 + 定时兜底（默认 5 分钟，loop_config 可运行时调整）
+#  - 事件触发 + 定时兜底（默认 10 分钟，loop_config 可运行时调整； 由 5 分钟改为 10 分钟）
 #  - 每循环：召回记忆→结合用户状态/人格/时间分析场景→决定行为（主动能力唯一决策点）
 #  - 后果评估 + 行动预算/发言限频/空转抑制/超时；循环日志写回记忆(source=loop)
 #  -：用户主动发消息后暂停时间驱动循环 quietAfterUserMs（默认 180s），窗口内只跑对话循环；
@@ -61,7 +61,7 @@
       name: dsh-archive-loop
       config:
         enabled: true
-        fallbackIntervalMs: 300000
+        fallbackIntervalMs: 600000
         tickMs: 30000
         initialDelayMs: 30000
         thinkTimeoutMs: 120000
@@ -80,6 +80,11 @@
         # 700/2000 下复杂简报易致正文截断 → "LLM 未返回文本" → 循环失败风暴；10000 预留充足空间）。
         # 总控「思维循环」页运行配置可运行时调整（无需重启）。
         maxTokens: 10000
+        #：空转留档节流（不发言不行动的空转轮最小留档间隔，0=关闭；
+        # 实机 ~200-270 条 loop 记录/天，绝大多数是完全相同的待命轮）
+        noopRecordIntervalMs: 3600000
+        #：账户余额/额度不足时的冷却时长（QUOTA/402 属"等用户充值"的持久性错误）
+        quotaCooldownMs: 1800000
         # 睡眠/清醒期：用户"睡眠中"持续 ≥sleepEnterDelayMs 且未来
         # sleepCheckWindowMs 内无 pending 任务 → 进入睡眠期（循环完全暂停）。
         #  语义修正：仅真实唤醒信号解除——定时任务/用户消息/状态被清除或改标
@@ -165,6 +170,11 @@
         condenseModel: phi
         llmModel: deepseek
         autoApply: false
+        #：单次调用 token 预算（deepseek-v4-flash 为推理模型，reasoning 先吃预算；
+        # 原 500/120 过小——61 次碰撞仅成功 1 次、呓语退化成 3 个字）。凝缩走本地 Phi 保持小预算。
+        condenseMaxTokens: 120
+        collideMaxTokens: 3500
+        whisperMaxTokens: 1000
 
 #  人格一致性校验器（dsh-archive-consistency）：滑动窗口人格轨迹（最近 100 轮
 # 交互 + 最近 5 条已审批进化建议的 768 维向量）+ PCA 3 维坐标 + 突变梯度拦截（G<α 放行 /

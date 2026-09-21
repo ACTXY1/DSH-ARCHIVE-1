@@ -2,7 +2,7 @@
  * dsh-archive-loop —— DSH-ARCHIVE 自循环思考驱动器（Cordis 插件）。
  *
  * 需求（方案 docs/-设计方案-虚拟时钟与自循环.md v2）：
- *  - 基于虚拟时钟，事件触发 + 定时兜底（默认 5 分钟，可运行时调整）；
+ *  - 基于虚拟时钟，事件触发 + 定时兜底（默认 10 分钟，可运行时调整）；
  *  - 每循环：召回近期及有关记忆 → 结合用户状态/人格/时间分析场景 → 决定行为
  *    （主动发言等一切主动能力统一由"决定行为"一步决策；工具类主动行动前先评估后果及是否告知用户）；
  *  - 对话打断思考循环 → 先完成该循环（有界）再进入对话（beforeTurn 互斥）；
@@ -31,7 +31,7 @@ export const inject = ['tools', 'systemPrompt', 'timer', 'llm', 'virtualClock', 
 
 const DEFAULTS = {
   enabled: true,
-  fallbackIntervalMs: 300000, // 兜底 5 分钟（用户确认默认值）
+  fallbackIntervalMs: 600000, // 兜底 10 分钟（ 用户指定：由 5 分钟改为 10 分钟，降低无事件时的空转频次）
   reducedFallbackMs: 1800000, // 降频模式兜底 30 分钟（由总控开关控制，不再依赖用户状态）
   reducedMode: false, // 降频模式开关（settings archive-loop 持久化）
   tickMs: 30000,
@@ -42,6 +42,11 @@ const DEFAULTS = {
   thinkTimeoutMs: 120000,
   //  凭证缺失冷却时长：未配置 API key 时循环暂停低频探测，避免 30s 风暴空转
   credentialRetryMs: 300000,
+  //  账户额度冷却时长：QUOTA/402（余额或配额不足）与凭证缺失同为"等用户处理"的持久性错误，
+  // 但恢复更慢（实机 09-20 15:22→09-21 15:50 连续失败 91 次），冷却取 30 分钟；充值后成功一轮即自动清除。
+  quotaCooldownMs: 1800000,
+  //  空转留档降采样：纯空转轮（不发言不行动）写记忆的最小间隔（默认 1 小时；0=关闭降采样，恢复全量留档）
+  noopRecordIntervalMs: 3600000,
   conversationTimeoutMs: 300000, // 对话占位自动释放（未调用 endConversation 时）
   provider: 'deepseek-official',
   model: 'deepseek-v4-flash',
@@ -150,6 +155,12 @@ function normalizeConfig(raw = {}) {
   };
   num('fallbackIntervalMs', 1000);
   num('reducedFallbackMs', 1000);
+  num('quotaCooldownMs', 1000);
+  // 空转留档节流间隔：允许 0（=关闭节流，恢复每轮全量留档），故单独用非负校验
+  if (raw.noopRecordIntervalMs !== undefined) {
+    if (!Number.isFinite(raw.noopRecordIntervalMs) || raw.noopRecordIntervalMs < 0) throw new Error('archive-loop 配置错误：noopRecordIntervalMs 必须是非负数（0=关闭节流）');
+    cfg.noopRecordIntervalMs = Math.floor(raw.noopRecordIntervalMs);
+  }
   num('tickMs', 1000);
   num('initialDelayMs', 0);
   num('thinkTimeoutMs', 1000);
@@ -271,6 +282,8 @@ export function apply(ctx, rawConfig) {
     // 每 30s 重试只会空转耗资源（手机端实测 error#1..#14 刷屏 + 周期拖慢网页）。进入冷却后
     // 时间驱动循环暂停低频探测，配置写入事件（archive/credentials-changed）会立即唤醒重试。
     credentialCooldownUntil: 0,
+    //：冷却原因（'credential' 未配置密钥 | 'quota' 余额/额度不足 | '' 无），供总控显示与日志区分
+    cooldownReason: '',
     //：最近真实对话缓冲（主会话 user↔ai，内存态，cap 40 条）——主动循环简报
     // <recent-dialogue> 的数据源（对话记忆只落用户侧，AI 回复仅存在于会话事件流，须在此缓冲）。
     dialogue: [],
@@ -279,6 +292,9 @@ export function apply(ctx, rawConfig) {
     //：最近一次"任意会话"的真实用户消息时间（无人值守提示的判定依据；
     // 与 latestUserInput 分开——后者只记主会话且被 pre-turn 决策消费，不可挪作他用）。
     lastUserAt: 0,
+    //  空转留档降采样：最近一次"空转轮（不发言不行动）"写记忆的时间；noopSkipped 统计被节流次数
+    lastNoopRecordAt: 0,
+    noopSkipped: 0,
   };
   const guards = new LoopGuards(config);
   let lastHour = new Date().getHours();
@@ -938,8 +954,21 @@ export function apply(ctx, rawConfig) {
       }
       const logContent = renderLoopLog({ time, reason, decision });
       if (state.activeCycle?.userCancelled === true) return { skipped: false, cancelled: true, reason };
+      //  空转留档降采样（容量治理）：实机观测 ~200-270 条 loop 记录/天，其中绝大多数是
+      // 完全相同的"不发言/不行动"待命轮（记忆整合提示词里也点名过"大量『安静待命』"）。全量留档
+      // 让记忆库 8 天从 1741 → 3272 条（90% 是 thought），既撑大库/备份，也稀释语义召回。
+      // 现规则：**有实质行为（发言/行动）一律留档**；纯空转轮按 noopRecordIntervalMs（默认 1 小时）
+      // 节流——保留每小时一条的心跳轨迹，语义与活动流均不受损（决策本身仍每轮照常执行）。
+      const noopCycle = !decision.shouldSpeak && !(decision.shouldAct && Array.isArray(decision.actionResults) && decision.actionResults.some((r) => r.status === 'executed' || r.status === 'deferred'));
+      const throttled = noopCycle && config.noopRecordIntervalMs > 0
+        && state.lastNoopRecordAt > 0 && Date.now() - state.lastNoopRecordAt < config.noopRecordIntervalMs;
+      if (throttled) {
+        state.noopSkipped = (state.noopSkipped ?? 0) + 1;
+        logger.info(`archive-loop: 空转轮留档节流（距上次空转留档 ${Math.round((Date.now() - state.lastNoopRecordAt) / 60000)} 分钟 < ${Math.round(config.noopRecordIntervalMs / 60000)} 分钟）`);
+      } else {
       try {
         const written = await ctx.memory.write({ content: logContent, kind: 'thought', source: 'loop', importance: 0.4, tags: ['loop'] });
+        if (noopCycle) state.lastNoopRecordAt = Date.now();
         //：写回瞬间被用户消息中止 → 删除刚写的记录（并行决策不留档，行为回退）；
         //：cap（前置思考超时）中止不删档——该记录完整决策已生成，留档供活动流查看。
         if (state.activeCycle?.userCancelled === true && state.activeCycle?.abortKind !== 'cap' && written?.id) {
@@ -949,11 +978,18 @@ export function apply(ctx, rawConfig) {
       } catch (error) {
         logger.warn(`archive-loop: 循环日志写回失败：${error.message}`);
       }
+      }
       if (state.activeCycle?.userCancelled === true) return { skipped: false, cancelled: true, reason };
       state.lastDecision = decision;
       state.lastDecisionAt = Date.now();
       state.lastDecisionReason = reason; //：供 <loop-analysis> 注入标注来源（pre-turn/fallback…）
       state.cycleCount++;
+      //：成功一轮即清除持久性错误冷却（账户充值/配置修复后无需等冷却自然到期）
+      if (state.credentialCooldownUntil > 0) {
+        state.credentialCooldownUntil = 0;
+        state.cooldownReason = '';
+        logger.info('archive-loop: 循环已恢复，清除冷却');
+      }
       //  事件监听者异常不判循环失败重跑（此前监听者抛错会进 catch →
       // errorCount++ 且 dirty 置回 → 下个 tick 重跑整轮循环（重复 LLM/动作/发言））
       try { ctx.emit('archive/loop-cycle', { at: Date.now(), reason, decision: JSON.parse(JSON.stringify(decision)) }); } catch { /* 事件失败不阻断 */ }
@@ -984,11 +1020,21 @@ export function apply(ctx, rawConfig) {
       //  凭证缺失冷却：MISSING_CREDENTIAL（未配置 API key）是"等用户配置"的持久性错误，
       // 30s 风暴空转（每轮先跑 SQLite 召回/构造简报，手机端实测周期拖慢网页打开）→ 进入 5 分钟冷却，
       // 冷却期内 tick 全部跳过；模型页配置成功会 emit archive/credentials-changed 立即唤醒。
+      //  扩展：QUOTA/402（余额或配额不足）同类但恢复更慢 → 独立更长冷却（quotaCooldownMs）。
       const errText = String(error?.message ?? error ?? '');
       const isCredentialMissing = /MISSING_CREDENTIAL|no API key|INVALID_CREDENTIAL/i.test(errText);
+      const isQuotaExhausted = !isCredentialMissing && /QUOTA|Insufficient Balance|Payment Required|\b402\b|余额不足|额度不足/i.test(errText);
       if (isCredentialMissing && state.credentialCooldownUntil <= Date.now()) {
+        state.cooldownReason = 'credential';
         state.credentialCooldownUntil = Date.now() + config.credentialRetryMs;
         bootLine(`[archive-loop] 未配置模型密钥（${reason}）：${errText.slice(0, 140)} → 循环暂停 ${Math.round(config.credentialRetryMs / 60000)} 分钟，配置后自动恢复`);
+      } else if (isQuotaExhausted && state.credentialCooldownUntil <= Date.now()) {
+        state.cooldownReason = 'quota';
+        state.credentialCooldownUntil = Date.now() + config.quotaCooldownMs;
+        bootLine(`[archive-loop] 账户余额/额度不足（${reason}）：${errText.slice(0, 140)} → 循环暂停 ${Math.round(config.quotaCooldownMs / 60000)} 分钟（避免空转刷屏），充值后成功一轮即自动恢复`);
+      } else if (isQuotaExhausted || isCredentialMissing) {
+        // 冷却期内的重复失败：不再刷日志（冷却由 credentialCooldownUntil 统一把守）
+        bootLine(`[archive-loop] 循环失败(${reason}) error#${state.errorCount}: ${errText.slice(0, 100)}（冷却中：${state.cooldownReason || 'unknown'}）`);
       } else {
         //  诊断增强：循环失败直写 stdout（进 archive.log）——此前仅 logger.warn，
         // dsh logger 输出不落 archive.log，失败风暴期间具体错误码完全不可见（实机 19:41-20:57 失败
@@ -998,10 +1044,14 @@ export function apply(ctx, rawConfig) {
       //  韧性补丁：失败保留 dirty 标志——断网/API 瞬时故障后下一个 tick（30s）自动重试，
       // 而不是静默等到下一个自然触发点；持久故障下重试很快失败、无 token 浪费。
       //：凭证缺失除外（冷却期内不置 dirty，避免 30s 风暴；冷却到期后由兜底触发自然重试）。
-      if (!isCredentialMissing) {
+      //：额度不足同理（冷却 30 分钟，到期后由兜底触发重试；期间靠 credentialCooldownUntil 把守）。
+      const persistent = isCredentialMissing || isQuotaExhausted;
+      if (!persistent) {
         state.dirty = true;
         if (!state.dirtyReasons.includes(reason)) state.dirtyReasons.push(reason);
         logger.warn(`archive-loop: 循环失败（${reason}）：${error.message}`);
+      } else if (isQuotaExhausted) {
+        logger.warn(`archive-loop: 账户余额/额度不足（${reason}），循环暂停至额度恢复：${error.message}`);
       } else {
         logger.warn(`archive-loop: 凭证缺失（${reason}），循环暂停至配置就绪：${error.message}`);
       }
@@ -1072,6 +1122,7 @@ export function apply(ctx, rawConfig) {
   ctx.on('archive/credentials-changed', () => {
     if (state.credentialCooldownUntil > Date.now()) {
       state.credentialCooldownUntil = 0;
+      state.cooldownReason = '';
       logger.info('archive-loop: 检测到模型凭证已配置，清除冷却并恢复自循环');
       markDirty('credentials-ready');
     }
@@ -1137,6 +1188,11 @@ export function apply(ctx, rawConfig) {
       if (patch.quietAfterUserMs !== undefined) {
         if (!Number.isFinite(patch.quietAfterUserMs) || patch.quietAfterUserMs < 0) throw new Error('quietAfterUserMs 必须 ≥0ms');
         config.quietAfterUserMs = patch.quietAfterUserMs;
+      }
+      //  空转留档节流间隔运行时调整（≥0，0=关闭节流恢复每轮全量留档）
+      if (patch.noopRecordIntervalMs !== undefined) {
+        if (!Number.isFinite(patch.noopRecordIntervalMs) || patch.noopRecordIntervalMs < 0) throw new Error('noopRecordIntervalMs 必须 ≥0ms（0=关闭节流）');
+        config.noopRecordIntervalMs = Math.floor(patch.noopRecordIntervalMs);
       }
       //  单次决策 token 预算运行时调整（总控「思维循环」页编辑栏；默认 10000 在 cordis.patch.yml）
       if (patch.maxTokens !== undefined) {
@@ -1247,10 +1303,12 @@ export function apply(ctx, rawConfig) {
       cancelledCount: state.cancelledCount, //
       quietLeftMs: Math.max(0, state.quietUntil - Date.now()), //
       credentialCooldownLeftMs: Math.max(0, state.credentialCooldownUntil - Date.now()), //
+      cooldownReason: state.credentialCooldownUntil > Date.now() ? (state.cooldownReason || 'unknown') : '', //
       lastCycleAt: state.lastCycleAt,
       lastDecisionAt: state.lastDecisionAt,
       sleepSkips: state.sleep.skips,
       sleepPhase: state.sleep.phase,
+      noopSkipped: state.noopSkipped ?? 0, //：被节流的空转留档轮数
       guards: guards.stats(),
       config: {
         fallbackIntervalMs: config.fallbackIntervalMs,
@@ -1264,6 +1322,10 @@ export function apply(ctx, rawConfig) {
         preTurnColdGapMs: config.preTurnColdGapMs, //：冷启动判定阈值（距上一用户回合 ms）
         preTurnColdCapMs: config.preTurnColdCapMs, //：冷启动首条前置思考临时等待上限（ms）
         dualAgent: config.dualAgent, //：双 Agent（记忆加工+输出审查）开关
+        credentialRetryMs: config.credentialRetryMs, //：凭证缺失冷却时长
+        quotaCooldownMs: config.quotaCooldownMs, //：余额/额度不足冷却时长
+        unattendedAfterMs: config.unattendedAfterMs, //：无人值守提示阈值
+        noopRecordIntervalMs: config.noopRecordIntervalMs, //：空转留档节流间隔（0=关闭）
         tickMs: config.tickMs, provider: config.provider, model: config.model,
         credentialRetryMs: config.credentialRetryMs, //
         sleepEnterDelayMs: config.sleepEnterDelayMs, sleepMaxMs: config.sleepMaxMs,

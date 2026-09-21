@@ -4,7 +4,7 @@
       name: dsh-archive-loop
       config:
         enabled: true
-        fallbackIntervalMs: 300000
+        fallbackIntervalMs: 600000
         tickMs: 30000
         initialDelayMs: 30000
         thinkTimeoutMs: 60000

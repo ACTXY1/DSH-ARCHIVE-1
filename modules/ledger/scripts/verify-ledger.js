@@ -117,6 +117,21 @@ try {
 // 8) inject 回调已登记（llm/connection），供实机接入
 check('inject 回调已登记', injectCbs.length >= 2 && injectCbs.some((c) => c.deps[0] === 'llm') && injectCbs.some((c) => c.deps[0] === 'connection'));
 
+// 9)  容量治理：落盘增量就地裁剪（原实现只在启动时裁剪，长跑实例无界增长）
+//    实机背景：18 天 6059 条 = 59MB（约 5MB/天）；单条均 ~9.7KB。现自 fileLineCap(3000)/fileTrimTo(1500) 起算。
+{
+  const trimDir = join(tmpdir(), `ledger-trim-${Date.now()}`);
+  const fakeCtx2 = { root: { logger: origRootLogger }, provide: () => {}, inject: () => {}, on: () => {} };
+  const api2 = apply(fakeCtx2, { dataPath: trimDir, flushMs: 60, fileLineCap: 5, fileTrimTo: 2 });
+  for (let i = 0; i < 8; i++) api2.recordPrompt({ module: 'loop', user: `裁剪测试 ${i}`, status: 'ok' });
+  await new Promise((r) => setTimeout(r, 300));
+  const trimFile = join(trimDir, 'prompts.jsonl');
+  const lines = readFileSync(trimFile, 'utf8').split('\n').filter(Boolean);
+  check('落盘增量就地裁剪（保留 ≤ fileTrimTo 行）', lines.length === 2, `lines=${lines.length}`);
+  check('裁剪保留的是最新记录', lines[lines.length - 1].includes('裁剪测试 7'), lines[lines.length - 1]?.slice(0, 60));
+  try { rmSync(trimDir, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
 try { rmSync(dataPath, { recursive: true, force: true }); } catch { /* ignore */ }
 console.log(`\nledger verify: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

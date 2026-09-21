@@ -50,6 +50,12 @@ const DEFAULTS = {
   autoApply: false,               // 自动微调总开关（默认关，保守——符合"绝不自动采纳"原则）
   whisperSim: 0.55,               // 呓语注入的话题相关余弦阈值
   whisperTtlMs: 86400000,         // 呓语有效期（24h，过期不再注入）
+  //  新增：单次调用 token 预算（对齐 loop 的经验——deepseek-v4-flash 是推理模型，
+  // reasoning 先吃预算，过小会致正文截断 / JSON 不完整：呓语曾退化成 3 个字的"昨夜我"、
+  // 61 次碰撞只成功 1 次）。凝缩走本地 Phi（非推理模型），预算保持小即可。
+  condenseMaxTokens: 120,
+  collideMaxTokens: 3500,
+  whisperMaxTokens: 1000,
   llmTimeoutMs: 30000,
   embedTimeoutMs: 8000,
   poolCap: 100,
@@ -73,7 +79,7 @@ function normalizeConfig(raw = {}) {
     if (!['phi', 'deepseek'].includes(raw.llmModel)) throw new Error('archive-subconscious 配置错误：llmModel 必须是 phi 或 deepseek');
     cfg.llmModel = raw.llmModel;
   }
-  for (const key of ['highFreqMin', 'highFreqWindowMs', 'condenseTopK', 'collidePairs', 'whisperTtlMs', 'llmTimeoutMs', 'embedTimeoutMs', 'poolCap', 'draftsCap', 'flushDebounceMs']) {
+  for (const key of ['highFreqMin', 'highFreqWindowMs', 'condenseTopK', 'collidePairs', 'whisperTtlMs', 'llmTimeoutMs', 'embedTimeoutMs', 'poolCap', 'draftsCap', 'flushDebounceMs', 'condenseMaxTokens', 'collideMaxTokens', 'whisperMaxTokens']) {
     if (raw[key] !== undefined) {
       if (!Number.isFinite(raw[key]) || raw[key] <= 0) throw new Error(`archive-subconscious 配置错误：${key} 必须是正数`);
       cfg[key] = Math.floor(raw[key]);
@@ -174,6 +180,10 @@ export function apply(ctx, rawConfig) {
     whisper: null,       // {text, vec, at, reason, consumed}
     stats: { runs: 0, condensed: 0, collisions: 0, imported: 0, autoApplied: 0, whispers: 0, injects: 0, skips: 0 },
     lastRunAt: 0,
+    //  失败可见性：最近一次失败（阶段+原因）与最近一轮摘要，供「自进化页」展示。
+    // 背景：此前失败只走 logger.warn——既不入 archive.log 也不进 UI，凝缩 404 连续失败数日无人察觉。
+    lastError: null,     // {phase, message, at}
+    lastRun: null,       // {at, condensed, tried, failed, high, auto, skip}
   });
   let st = loadState();
   // 回填运行时配置覆盖（configure 的持久化值优先于 cordis.patch.yml 默认）
@@ -193,6 +203,13 @@ export function apply(ctx, rawConfig) {
         if (!Array.isArray(base.pool)) base.pool = [];
         if (!Array.isArray(base.drafts)) base.drafts = [];
         if (typeof base.stats !== 'object' || base.stats === null) base.stats = baseState().stats;
+        //  载入时清洗潜记忆池（幂等）：早期 Phi 输出曾在原型后续写伪造的"记忆片段："块，
+        // 旧实现只截断 80 字 → 回显垃圾进了池。这里按同款规则清理，清不干净的（纯脚手架）直接丢弃。
+        const before = base.pool.length;
+        base.pool = base.pool
+          .map((p) => (p && typeof p.text === 'string' && p.text !== sanitizePrototype(p.text) ? { ...p, text: sanitizePrototype(p.text) } : p))
+          .filter((p) => p && typeof p.text === 'string' && !looksLikeScaffold(p.text));
+        if (base.pool.length !== before) base.__poolCleaned = true;
       }
     } catch (error) {
       logger.warn(`archive-subconscious: 状态文件损坏，使用空状态：${error?.message ?? error}`);
@@ -201,6 +218,12 @@ export function apply(ctx, rawConfig) {
     return base;
   }
   function markDirty() { dirty = true; scheduleFlush(); }
+  // 载入时清洗过潜记忆池 → 立即落盘（幂等；清洗结果与历史污染一次性收口）
+  if (st.__poolCleaned === true) {
+    delete st.__poolCleaned;
+    bootLine(`[archive-subconscious] 潜记忆池载入清洗完成：${st.pool.length} 条（移除/修正历史回显条目）`);
+    markDirty();
+  }
   function scheduleFlush() {
     if (flushTimer) return;
     flushTimer = ctx.timer.setTimeout(() => { flushTimer = null; flush(); }, config.flushDebounceMs);
@@ -338,6 +361,38 @@ export function apply(ctx, rawConfig) {
   }
 
   // ── ① 记忆脱粒机（凝缩） ──
+  /**
+   *  失败可见性：梦境引擎的失败此前只走 logger.warn——dsh logger 输出既不落
+   * archive.log（该日志只收 bootLine/notify 输出），UI 上也看不到，于是"Phi 模型不可用 →
+   * 凝缩全 404 → 潜记忆池停更"连续数日无人发现。现统一：记录到状态（UI 展示）+ 保留 logger.warn；
+   * 每轮结束由 runDreamEngine 汇总写 stdout（进 archive.log）。
+   */
+  function noteFailure(phase, error) {
+    const message = String(error?.message ?? error ?? 'unknown');
+    st.lastError = { phase, message: message.slice(0, 200), at: Date.now() };
+    try { logger.warn(`archive-subconscious: ${phase}失败：${message}`); } catch { /* 日志失败不阻断 */ }
+  }
+  /**
+   * 原型文本清洗。本地小模型（phi3:mini）常在原型后**继续续写**——实机复现：
+   * 输出为 `"深夜…的沉思。"\n\n\n记忆片段：\n[06-23 15:27] …`（连日期都是编的）。旧实现只做
+   * `/^[-*•\s]+/` 去前缀 + 80 字截断，于是引号与伪造的脚手架块一起进了潜记忆池
+   * （实测 31 条池条目里有 3 条是这种回显垃圾）。现统一：只取首段、去掉引号/列表符、剔除脚手架行。
+   */
+  function sanitizePrototype(raw) {
+    const first = String(raw ?? '').split(/\n\s*\n/)[0];
+    return first
+      .split('记忆片段')[0]
+      .split('<loop-decision')[0]
+      .split('原型陈')[0]
+      .replace(/^["'“”‘’\s\-*•]+|["'“”‘’\s]+$/g, '')
+      .trim()
+      .slice(0, 80);
+  }
+  /** 是否仍是脚手架/回显内容（清洗后仍出现即视为噪声条目）。 */
+  function looksLikeScaffold(text) {
+    const t = String(text ?? '');
+    return t.includes('记忆片段') || t.includes('<loop-decision') || t.includes('用户：') || t.length < 2;
+  }
   /** 过去 24h 内访问频率 > highFreqMin 的记忆片段（access_count 累计 + last_access_at 窗口近似）。 */
   function highFreqMemories() {
     try {
@@ -370,9 +425,9 @@ export function apply(ctx, rawConfig) {
         return `${head}${String(m?.content ?? '').slice(0, 120)}`;
       }).join('\n');
       try {
-        const text = await llmFor('condense', CONDENSE_PROMPT, `记忆片段：\n${excerpts}`, 120);
-        const clean = String(text ?? '').replace(/^[-*•\s]+/, '').trim().slice(0, 80);
-        if (!clean) continue;
+        const text = await llmFor('condense', CONDENSE_PROMPT, `记忆片段：\n${excerpts}`, config.condenseMaxTokens);
+        const clean = sanitizePrototype(text);
+        if (!clean || looksLikeScaffold(clean)) continue;
         const vec = await embedText(clean);
         if (!vec || vec.length === 0) continue;
         // 池内去重（近似文本）
@@ -381,7 +436,7 @@ export function apply(ctx, rawConfig) {
         if (st.pool.length > config.poolCap) st.pool.splice(0, st.pool.length - config.poolCap);
         added++;
       } catch (error) {
-        logger.warn(`archive-subconscious: 凝缩失败：${error?.message ?? error}`);
+        noteFailure('condense', error);
       }
     }
     if (added > 0) { st.stats.condensed += added; markDirty(); }
@@ -439,7 +494,7 @@ export function apply(ctx, rawConfig) {
       const cons = ctx.get('consistency');
       trajectory = Array.isArray(cons?.trajectoryText?.(5)) ? cons.trajectoryText(5) : [];
     } catch { /* 轨迹不可用则跳过自洽参照 */ }
-    const text = await llmFor('collide', collidePrompt(a.text, b.text, trajectory), '', 500);
+    const text = await llmFor('collide', collidePrompt(a.text, b.text, trajectory), '', config.collideMaxTokens);
     let parsed = null;
     let parseError = null;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -468,17 +523,27 @@ export function apply(ctx, rawConfig) {
       return { verdict: 'skip-bad-section', reason: '非法 section' };
     }
     // 新颖度：与已有进化建议向量的最大差异（1 - 最大余弦）
-    const vec = await embedText(String(draft.content).slice(0, 300));
+    //：embed 单独兜底——此前 embed 一次抖动（ollama 超时/忙）会抛出并作废整次碰撞，
+    // 是"61 次碰撞只成功 1 次"的嫌疑来源之一；拿不到向量时按"未知新颖度"处理（novelty=null 不会进自动微调）。
+    let vec = null;
+    try {
+      vec = await embedText(String(draft.content).slice(0, 300));
+    } catch (error) {
+      noteFailure('碰撞向量化', error);
+    }
     const existing = await existingCandidateVecs();
-    let novelty = 100;
-    if (existing.length > 0) {
-      const maxCos = Math.max(...existing.map((v) => cosine(vec, v)));
-      novelty = Math.max(0, Math.min(100, Math.round((1 - maxCos) * 100)));
+    let novelty = null;
+    if (vec && vec.length > 0) {
+      novelty = 100;
+      if (existing.length > 0) {
+        const maxCos = Math.max(...existing.map((v) => cosine(vec, v)));
+        novelty = Math.max(0, Math.min(100, Math.round((1 - maxCos) * 100)));
+      }
     }
     // 梯度方向一致：与最近 3 条已采纳建议的平均余弦 ≥ gradientSim
     const applied = await recentAppliedVecs();
     let gradient = false;
-    if (applied.length > 0) {
+    if (vec && vec.length > 0 && applied.length > 0) {
       const avgCos = applied.reduce((s, v) => s + cosine(vec, v), 0) / applied.length;
       gradient = avgCos >= config.gradientSim;
     }
@@ -539,17 +604,32 @@ export function apply(ctx, rawConfig) {
     st.lastRunAt = Date.now();
     try {
       const added = await condense();
-      if (st.pool.length < 2) return { skipped: true, reason: 'pool-too-small', condensed: added };
+      if (st.pool.length < 2) {
+        //：跳过原因也写 stdout（此前静默返回，凝缩全失败时用户完全无感）
+        bootLine(`[archive-subconscious] 梦境引擎跳过：潜记忆池仅 ${st.pool.length} 条（本轮凝缩 +${added}）`);
+        return { skipped: true, reason: 'pool-too-small', condensed: added };
+      }
       const results = [];
+      let failed = 0;
       for (const pair of poolPairs()) {
         try { results.push(await collideOnce(pair)); } catch (error) {
+          failed++;
           st.stats.skips++;
-          logger.warn(`archive-subconscious: 碰撞失败：${error?.message ?? error}`);
+          noteFailure('碰撞', error);
         }
       }
-      return { ok: true, condensed: added, results };
+      const high = results.filter((r) => r.verdict === 'high').length;
+      const auto = results.filter((r) => r.verdict === 'auto-applied').length;
+      const skip = results.filter((r) => String(r.verdict).startsWith('skip')).length;
+      st.lastRun = { at: Date.now(), condensed: added, tried: results.length + failed, failed, high, auto, skip };
+      const summary = `凝缩+${added} 碰撞 ${results.length}/${results.length + failed}（失败 ${failed}·高优先 ${high}·自动微调 ${auto}·跳过 ${skip}）`;
+      bootLine(failed > 0
+        ? `[archive-subconscious] 梦境引擎完成：${summary}；最近失败(${st.lastError?.phase ?? '?'})：${String(st.lastError?.message ?? '').slice(0, 140)}`
+        : `[archive-subconscious] 梦境引擎完成：${summary}`);
+      return { ok: true, condensed: added, results, failed };
     } catch (error) {
-      logger.warn(`archive-subconscious: 梦境引擎失败：${error?.message ?? error}`);
+      noteFailure('引擎', error);
+      bootLine(`[archive-subconscious] 梦境引擎失败：${String(error?.message ?? error).slice(0, 140)}`);
       return { skipped: true, error: error.message };
     } finally {
       engineRunning = false;
@@ -572,8 +652,11 @@ export function apply(ctx, rawConfig) {
         markDirty();
         return { ok: true, text: st.whisper.text };
       }
-      const text = await llmFor('whisper', whisperPrompt(material), '', 120);
+      const text = await llmFor('whisper', whisperPrompt(material), '', config.whisperMaxTokens);
       const clean = String(text ?? '').replace(/^["'“”\s]+|["'“”\s]+$/g, '').trim().slice(0, 80);
+      //：过短文本视为生成失败（推理模型预算不足时会截断成"昨夜我"这类噪声，
+      // 保留为"呓语"会污染注入判据——噪声向量永远匹配不上话题，且会写进状态文件）。
+      if (clean.length < 6) throw new Error(`呓语文本过短（${clean.length} 字）：${clean}`);
       const vec = await embedText(clean).catch(() => null);
       st.whisper = { text: clean, vec, at: Date.now(), reason, consumed: false };
       st.stats.whispers++;
@@ -581,7 +664,8 @@ export function apply(ctx, rawConfig) {
       bootLine(`[archive-subconscious] 梦境呓语：${clean}`);
       return { ok: true, text: clean };
     } catch (error) {
-      logger.warn(`archive-subconscious: 呓语生成失败：${error?.message ?? error}`);
+      noteFailure('呓语', error);
+      bootLine(`[archive-subconscious] 呓语生成失败：${String(error?.message ?? error).slice(0, 140)}`);
       return { skipped: true, error: error.message };
     }
   }
@@ -663,6 +747,8 @@ export function apply(ctx, rawConfig) {
       draftCount: st.drafts.length,
       whisper: st.whisper ? { text: st.whisper.text, at: st.whisper.at, reason: st.whisper.reason, consumed: st.whisper.consumed } : null,
       lastRunAt: st.lastRunAt,
+      lastRun: st.lastRun ? { ...st.lastRun } : null,          //：最近一轮摘要（凝缩/碰撞/失败）
+      lastError: st.lastError ? { ...st.lastError } : null,    //：最近一次失败（阶段+原因+时间）
       engineRunning,
       downloading,
       stats: { ...st.stats },
@@ -753,7 +839,11 @@ export function apply(ctx, rawConfig) {
         return;
       }
       const text = st.whisper.text;
-      if (!text || !lastUserText || Date.now() - lastUserTextAt > 600000) return;
+      //  修复"呓语几乎永不注入"：原判据要求"距最近用户消息 ≤10 分钟"，但呓语是在
+      // **苏醒**时生成的，而苏醒多由用户那条消息触发——该回合已经开始，等下一回合时早超 10 分钟，
+      // 于是 4 条呓语全部 TTL 过期作废（stats.injects 恒为 0）。现改为：只要在 TTL 内、且用户有
+      // 最近发言（用于话题相关性判断）即可，注入仍受话题余弦闸门控制（保留"话题相关才注入"的设计初衷）。
+      if (!text || !lastUserText) return;
       // 话题相关性：用户输入向量 vs 呓语向量（免费；呓语无向量则放行注入一次）
       if (st.whisper.vec) {
         void (async () => {

@@ -1,5 +1,5 @@
 // 自循环集成验证（stub ctx）：触发循环 → LLM(假) → 决策解析 → 防护 → 循环日志 → 事件
-import { rmSync } from 'node:fs';
+import { rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -426,7 +426,74 @@ checks.push(['静默窗参数恢复默认(180s, I 块后)', api.stats().config.q
   api.configure({ credentialRetryMs: 300000 });
 }
 
-// ──  告知分级/割裂修复回归（实机 03:49"🤖 主动行动：已执行 memory_write"泄露进用户对话）──
+// ──  账户额度冷却回归：QUOTA/402（余额·配额不足）不再逐轮空转 ──
+// 实机 09-20 15:22 → 09-21 15:50 期间余额耗尽，loop 连续失败 91 次（每轮先跑 SQLite 召回+简报构造）。
+// 修复：与"凭证缺失"同类但冷却更长（quotaCooldownMs 默认 30 分钟），成功一轮即清除。
+{
+  const cycBeforeQ = api.stats().cycleCount;
+  LLM_THROW = 'QUOTA: Insufficient Balance';
+  api.endConversation();
+  api.trigger('startup');
+  captured.intervalFns[0](); // tick → cycle('startup') → LLM 抛额度不足
+  await new Promise((r) => setTimeout(r, 1200)); // callLlm 内部重试间隔 800ms
+  sCheck('额度不足进入冷却(cooldownLeftMs>0)', (api.stats().credentialCooldownLeftMs ?? 0) > 0, `left=${api.stats().credentialCooldownLeftMs}`);
+  sCheck('额度冷却原因标注(quota)', api.stats().cooldownReason === 'quota', `reason=${api.stats().cooldownReason}`);
+  sCheck('额度不足未新增循环计数(风暴停止)', api.stats().cycleCount === cycBeforeQ, `cycleCount=${api.stats().cycleCount} before=${cycBeforeQ}`);
+  // 冷却期内再次 tick → 不重试
+  const errBeforeQ = api.stats().errorCount;
+  api.trigger('fallback');
+  captured.intervalFns[0]();
+  await new Promise((r) => setTimeout(r, 150));
+  sCheck('额度冷却期内 tick 不触发循环(errorCount 不变)', api.stats().errorCount === errBeforeQ, `errorCount=${api.stats().errorCount} before=${errBeforeQ}`);
+  // 额度恢复（用户充值 / 用户来对话）→ 成功一轮即清冷却。
+  // 用 api.beforeTurn()（真实对话前置路径，直调 cycle('pre-turn')，不受冷却拦截）；
+  // 不用 trigger('pre-turn')+tick —— dirty 队列是 FIFO，先到的 time-based 条目仍会被冷却拦住。
+  LLM_THROW = '';
+  const recTurn = await api.beforeTurn('额度恢复测试');
+  api.endConversation();
+  await new Promise((r) => setTimeout(r, 200));
+  sCheck('额度恢复后成功一轮即清冷却', (api.stats().credentialCooldownLeftMs ?? 0) === 0 && api.stats().cycleCount >= cycBeforeQ + 1,
+    `left=${api.stats().credentialCooldownLeftMs} cycle=${api.stats().cycleCount} before=${cycBeforeQ} err=${api.stats().errorCount} mode=${api.state().mode} analysis=${String(recTurn?.decision?.analysis ?? '').slice(0, 40)}`);
+  checks.push(['额度冷却参数默认(30 分钟)', api.stats().config.quotaCooldownMs === 1800000]);
+  //  用户指定：兜底间隔默认 10 分钟——模块 DEFAULTS 与两份运行配置必须一致
+  const loopSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');
+  checks.push(['兜底间隔默认 10 分钟（模块 DEFAULTS）', /fallbackIntervalMs:\s*600000/.test(loopSrc)]);
+}
+
+// ──  空转留档降采样：不发言不行动的空转轮按 noopRecordIntervalMs（默认 1 小时）节流写记忆 ──
+// 背景：实机 ~200-270 条 loop 记录/天，绝大多数是完全相同的"待命"轮，让记忆库 8 天从 1741→3272 条；
+// 规则：有实质行为（发言或已执行/待确认行动）一律留档，纯空转轮节流。
+{
+  // 先把节流间隔设为 1ms（等价关闭）→ 确保本轮"空转首轮"必定留档并刷新 lastNoopRecordAt，测试才可复现
+  const wBefore = captured.writes.length;
+  api.configure({ noopRecordIntervalMs: 1 });
+  const NOOP = '{"analysis":"安静待命（降采样回归）","shouldSpeak":false,"shouldAct":false,"actions":[],"consequenceAssessment":"无副作用","notifyUser":false}';
+  DECISION_TEXT = NOOP;
+  api.endConversation();
+  api.trigger('state-changed');
+  captured.intervalFns[0]();
+  await new Promise((r) => setTimeout(r, 400));
+  const wFirst = captured.writes.length;
+  // 再恢复默认 1 小时节流 → 紧随其后的空转轮应被节流
+  api.configure({ noopRecordIntervalMs: 3600000 });
+  api.trigger('state-changed');
+  captured.intervalFns[0]();
+  await new Promise((r) => setTimeout(r, 400));
+  const wSecond = captured.writes.length;
+  sCheck('空转轮留档（interval=1ms 等价关闭时）', wFirst >= wBefore + 1, `writes=${wFirst} before=${wBefore}`);
+  sCheck('空转轮节流生效（1 小时内第二次空转不留档）', wSecond === wFirst, `writes=${wSecond} 首次后=${wFirst}`);
+  sCheck('节流计数已累计(noopSkipped≥1)', (api.stats().noopSkipped ?? 0) >= 1, `noopSkipped=${api.stats().noopSkipped}`);
+  // 有实质行为的轮次不受节流（发言=true）
+  DECISION_TEXT = '{"analysis":"实质行为轮（降采样回归）","shouldSpeak":true,"shouldAct":false,"actions":[],"consequenceAssessment":"仅发言无副作用","notifyUser":true}';
+  api.trigger('state-changed');
+  captured.intervalFns[0]();
+  await new Promise((r) => setTimeout(r, 400));
+  sCheck('实质行为轮不受节流（照常留档）', captured.writes.length >= wSecond + 1, `writes=${captured.writes.length} 节流后=${wSecond}`);
+  checks.push(['空转节流参数默认(1 小时)', api.stats().config.noopRecordIntervalMs === 3600000]);
+  DECISION_TEXT = '{"analysis":"用户睡眠中，不宜打扰","shouldSpeak":false,"shouldAct":true,"actions":[{"name":"user_state_set","args":{"state":"睡眠中","evidence":"循环决策"},"reason":"确认状态"}],"consequenceAssessment":"内部动作安全","notifyUser":true}';
+}
+
+
 // 语义：
 //  1) pre-turn（对话前置，用户正在对话）→ 行动照常执行但**零告知**（发言已禁，状态串/notify_send 同禁）；
 //  2) user_state_set/user_state_clear/memory_write 为静默内部动作 → 即使 notifyUser=true 也代码强制压制

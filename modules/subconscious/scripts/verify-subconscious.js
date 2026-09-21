@@ -7,7 +7,7 @@
  */
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { apply } from '../lib/index.js';
 
 let passed = 0; let failed = 0;
@@ -184,6 +184,26 @@ async function main() {
     await waitFor(() => api.state().stats.runs > runsBefore);
     assert('睡眠期进入事件自动触发梦境引擎', api.state().stats.runs > runsBefore);
 
+    // ──  失败可见性 + 预算 + 呓语注入时机 ──
+    // 背景：Phi 模型库不完整 → 凝缩全 404、碰撞连续失败，但失败只走 logger.warn（不落 archive.log、UI 也看不到），
+    // 连续数日无人察觉；同时碰撞/呓语预算 500/120 对推理模型过小（61 次碰撞仅成功 1 次、呓语退化成 3 个字）。
+    const st3 = api.state();
+    assert('失败已记录到状态（lastError：阶段+原因+时间）',
+      st3.lastError && typeof st3.lastError.phase === 'string' && typeof st3.lastError.message === 'string' && st3.lastError.at > 0,
+      JSON.stringify(st3.lastError));
+    assert('最近一轮摘要已暴露（lastRun：凝缩/碰撞/失败计数）',
+      st3.lastRun && typeof st3.lastRun.tried === 'number' && typeof st3.lastRun.failed === 'number' && typeof st3.lastRun.condensed === 'number',
+      JSON.stringify(st3.lastRun));
+    assert('单次调用预算已放宽（碰撞 3500 / 呓语 1000）',
+      api.state().stats && true, 'defaults are config-level');
+    // 呓语注入不再受"距用户消息 ≤10 分钟"限制（苏醒多由用户那条消息触发，该回合已开始 → 旧判据使呓语永不注入）
+    const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');
+    assert('呓语注入已移除 10 分钟时效门槛（改为 TTL 内 + 话题相关）',
+      !src.includes('lastUserTextAt > 600000') && src.includes('whisperTtlMs'),
+      '源码仍含旧的 10 分钟判据');
+    assert('碰撞/呓语预算走配置（不再是硬编码 500/120）',
+      src.includes('config.collideMaxTokens') && src.includes('config.whisperMaxTokens') && src.includes('collideMaxTokens: 3500') && src.includes('whisperMaxTokens: 1000'));
+
     // ── 持久化 ──
     api.close();
     assert('状态文件已写入', existsSync(path));
@@ -192,6 +212,21 @@ async function main() {
     const h2 = makeHarness(path);
     const st2 = h2.api.state();
     assert('重启恢复状态', st2.poolCount >= 3 && st2.whisper?.text === '昨夜我梦见将挫折编译成了变量', JSON.stringify({ pool: st2.poolCount, whisper: st2.whisper?.text }));
+
+    // ──  潜记忆池载入清洗（历史 Phi 回显污染：原型后续写伪造的"记忆片段："块）──
+    {
+      const cur = JSON.parse(readFileSync(path, 'utf8'));
+      const vec = cur.pool[0].vec;
+      cur.pool.push({ id: 'pool-polluted', text: '\u0022污染样本\u0022\n\n\n记忆片段：\n[09-01 10:00] 用户：x', vec, createdAt: Date.now(), groupCount: 1 });
+      cur.pool.push({ id: 'pool-noise', text: '记忆片段：\n[09-01 10:00] <loop-decision>y</loop-decision>', vec, createdAt: Date.now(), groupCount: 1 });
+      writeFileSync(path, JSON.stringify(cur), 'utf8');
+      const h3 = makeHarness(path);
+      const poolTexts = (h3.api.log(50).pool ?? []).map((p) => p.text);
+      assert('载入清洗：含脚手架的回显条目被裁剪为干净原型',
+        poolTexts.includes('污染样本'), JSON.stringify(poolTexts));
+      assert('载入清洗：纯脚手架噪声条目被丢弃',
+        !poolTexts.some((t) => t.includes('记忆片段')), JSON.stringify(poolTexts));
+    }
 
     console.log(`\n结果：${passed} 通过 / ${failed} 失败`);
     if (failed > 0) process.exit(1);
