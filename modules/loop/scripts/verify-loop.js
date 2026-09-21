@@ -489,6 +489,15 @@ checks.push(['静默窗参数恢复默认(180s, I 块后)', api.stats().config.q
   captured.intervalFns[0]();
   await new Promise((r) => setTimeout(r, 400));
   sCheck('实质行为轮不受节流（照常留档）', captured.writes.length >= wSecond + 1, `writes=${captured.writes.length} 节流后=${wSecond}`);
+  // 节流可关闭（noopRecordIntervalMs=0）→ 空转轮恢复全量留档
+  const wBeforeOff = captured.writes.length;
+  api.configure({ noopRecordIntervalMs: 0 });
+  DECISION_TEXT = NOOP;
+  api.trigger('state-changed');
+  captured.intervalFns[0]();
+  await new Promise((r) => setTimeout(r, 400));
+  sCheck('节流关闭（noopRecordIntervalMs=0）时空转轮照常留档', captured.writes.length >= wBeforeOff + 1, `writes=${captured.writes.length} 之前=${wBeforeOff}`);
+  api.configure({ noopRecordIntervalMs: 3600000 });
   checks.push(['空转节流参数默认(1 小时)', api.stats().config.noopRecordIntervalMs === 3600000]);
   DECISION_TEXT = '{"analysis":"用户睡眠中，不宜打扰","shouldSpeak":false,"shouldAct":true,"actions":[{"name":"user_state_set","args":{"state":"睡眠中","evidence":"循环决策"},"reason":"确认状态"}],"consequenceAssessment":"内部动作安全","notifyUser":true}';
 }

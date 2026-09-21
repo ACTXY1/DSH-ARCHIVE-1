@@ -205,11 +205,19 @@ export function apply(ctx, rawConfig) {
         if (typeof base.stats !== 'object' || base.stats === null) base.stats = baseState().stats;
         //  载入时清洗潜记忆池（幂等）：早期 Phi 输出曾在原型后续写伪造的"记忆片段："块，
         // 旧实现只截断 80 字 → 回显垃圾进了池。这里按同款规则清理，清不干净的（纯脚手架）直接丢弃。
+        // 注意：**文本被改写也要算清洗**（此前只按"条数变化"判定 → 纯改写不落盘、不打日志）。
         const before = base.pool.length;
-        base.pool = base.pool
-          .map((p) => (p && typeof p.text === 'string' && p.text !== sanitizePrototype(p.text) ? { ...p, text: sanitizePrototype(p.text) } : p))
-          .filter((p) => p && typeof p.text === 'string' && !looksLikeScaffold(p.text));
-        if (base.pool.length !== before) base.__poolCleaned = true;
+        let cleanedCount = 0;
+        const nextPool = [];
+        for (const p of base.pool) {
+          if (!p || typeof p.text !== 'string') { nextPool.push(p); continue; }
+          const cleaned = sanitizePrototype(p.text);
+          if (looksLikeScaffold(cleaned)) { cleanedCount++; continue; } // 丢弃噪声条目
+          if (cleaned !== p.text) { cleanedCount++; nextPool.push({ ...p, text: cleaned }); continue; }
+          nextPool.push(p);
+        }
+        base.pool = nextPool;
+        if (cleanedCount > 0) base.__poolCleaned = cleanedCount;
       }
     } catch (error) {
       logger.warn(`archive-subconscious: 状态文件损坏，使用空状态：${error?.message ?? error}`);
@@ -219,9 +227,10 @@ export function apply(ctx, rawConfig) {
   }
   function markDirty() { dirty = true; scheduleFlush(); }
   // 载入时清洗过潜记忆池 → 立即落盘（幂等；清洗结果与历史污染一次性收口）
-  if (st.__poolCleaned === true) {
+  if (st.__poolCleaned) {
+    const n = st.__poolCleaned;
     delete st.__poolCleaned;
-    bootLine(`[archive-subconscious] 潜记忆池载入清洗完成：${st.pool.length} 条（移除/修正历史回显条目）`);
+    bootLine(`[archive-subconscious] 潜记忆池载入清洗完成：修正/移除 ${n} 条历史回显条目，现 ${st.pool.length} 条`);
     markDirty();
   }
   function scheduleFlush() {
@@ -388,10 +397,14 @@ export function apply(ctx, rawConfig) {
       .trim()
       .slice(0, 80);
   }
-  /** 是否仍是脚手架/回显内容（清洗后仍出现即视为噪声条目）。 */
+  /**
+   * 是否仍是脚手架/回显内容：清洗后仍出现脚手架标记，或整条就是一条回显行
+   * （形如 `[09-21 03:12] 用户：…`），或短于 2 字 → 视为噪声丢弃。
+   * 注意只用"行首"判据，避免误伤正文里合法提到"用户："的原型。
+   */
   function looksLikeScaffold(text) {
-    const t = String(text ?? '');
-    return t.includes('记忆片段') || t.includes('<loop-decision') || t.includes('用户：') || t.length < 2;
+    const t = String(text ?? '').trim();
+    return t.includes('记忆片段') || t.includes('<loop-decision') || /^[\[\]\d\s\-:：]*用户：/.test(t) || t.length < 2;
   }
   /** 过去 24h 内访问频率 > highFreqMin 的记忆片段（access_count 累计 + last_access_at 窗口近似）。 */
   function highFreqMemories() {

@@ -957,9 +957,13 @@ export function apply(ctx, rawConfig) {
       //  空转留档降采样（容量治理）：实机观测 ~200-270 条 loop 记录/天，其中绝大多数是
       // 完全相同的"不发言/不行动"待命轮（记忆整合提示词里也点名过"大量『安静待命』"）。全量留档
       // 让记忆库 8 天从 1741 → 3272 条（90% 是 thought），既撑大库/备份，也稀释语义召回。
-      // 现规则：**有实质行为（发言/行动）一律留档**；纯空转轮按 noopRecordIntervalMs（默认 1 小时）
-      // 节流——保留每小时一条的心跳轨迹，语义与活动流均不受损（决策本身仍每轮照常执行）。
-      const noopCycle = !decision.shouldSpeak && !(decision.shouldAct && Array.isArray(decision.actionResults) && decision.actionResults.some((r) => r.status === 'executed' || r.status === 'deferred'));
+      // 现规则：**有实质行为（发言 / 行动已执行·待确认·失败）一律留档**；纯空转轮按
+      // noopRecordIntervalMs（默认 1 小时）节流——保留每小时一条的心跳轨迹，语义与活动流均不受损
+      // （决策本身仍每轮照常执行）。注意"行动失败"也算实质行为，必须留档（否则失败轨迹消失）。
+      const actionResults = Array.isArray(decision.actionResults) ? decision.actionResults : [];
+      const acted = actionResults.some((r) => r.status === 'executed' || r.status === 'deferred' || r.status === 'failed');
+      // shouldAct 但拿不到 actionResults（该路径未执行/未记录）时保守视为实质行为，不节流
+      const noopCycle = !decision.shouldSpeak && !acted && !(decision.shouldAct === true && actionResults.length === 0);
       const throttled = noopCycle && config.noopRecordIntervalMs > 0
         && state.lastNoopRecordAt > 0 && Date.now() - state.lastNoopRecordAt < config.noopRecordIntervalMs;
       if (throttled) {
@@ -1033,7 +1037,8 @@ export function apply(ctx, rawConfig) {
         state.credentialCooldownUntil = Date.now() + config.quotaCooldownMs;
         bootLine(`[archive-loop] 账户余额/额度不足（${reason}）：${errText.slice(0, 140)} → 循环暂停 ${Math.round(config.quotaCooldownMs / 60000)} 分钟（避免空转刷屏），充值后成功一轮即自动恢复`);
       } else if (isQuotaExhausted || isCredentialMissing) {
-        // 冷却期内的重复失败：不再刷日志（冷却由 credentialCooldownUntil 统一把守）
+        // 冷却期内的重复失败（例如 pre-turn 不受冷却拦截的那类）：照常留一条诊断，
+        // 但归入"冷却中"标记，避免与冷却外的普通失败混淆。
         bootLine(`[archive-loop] 循环失败(${reason}) error#${state.errorCount}: ${errText.slice(0, 100)}（冷却中：${state.cooldownReason || 'unknown'}）`);
       } else {
         //  诊断增强：循环失败直写 stdout（进 archive.log）——此前仅 logger.warn，

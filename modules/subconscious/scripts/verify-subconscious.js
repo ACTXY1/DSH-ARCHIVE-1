@@ -218,7 +218,9 @@ async function main() {
       const cur = JSON.parse(readFileSync(path, 'utf8'));
       const vec = cur.pool[0].vec;
       cur.pool.push({ id: 'pool-polluted', text: '\u0022污染样本\u0022\n\n\n记忆片段：\n[09-01 10:00] 用户：x', vec, createdAt: Date.now(), groupCount: 1 });
-      cur.pool.push({ id: 'pool-noise', text: '记忆片段：\n[09-01 10:00] <loop-decision>y</loop-decision>', vec, createdAt: Date.now(), groupCount: 1 });
+      cur.pool.push({ id: 'pool-noiise2', text: '记忆片段：\n[09-01 10:00] <loop-decision>y</loop-decision>', vec, createdAt: Date.now(), groupCount: 1 });
+      // 反例：正文里合法提到"用户："的原型不得被误删
+      cur.pool.push({ id: 'pool-legit', text: '深夜陪伴与被需要的确认（用户：希望有人在）', vec, createdAt: Date.now(), groupCount: 1 });
       writeFileSync(path, JSON.stringify(cur), 'utf8');
       const h3 = makeHarness(path);
       const poolTexts = (h3.api.log(50).pool ?? []).map((p) => p.text);
@@ -226,6 +228,14 @@ async function main() {
         poolTexts.includes('污染样本'), JSON.stringify(poolTexts));
       assert('载入清洗：纯脚手架噪声条目被丢弃',
         !poolTexts.some((t) => t.includes('记忆片段')), JSON.stringify(poolTexts));
+      assert('载入清洗：正文合法提及"用户："的原型不被误删',
+        poolTexts.some((t) => t.includes('深夜陪伴与被需要的确认')), JSON.stringify(poolTexts));
+      // 文本被改写（条数不变）也必须算作清洗并落盘 —— 回归：此前只按"条数变化"判定，纯改写不落盘。
+      // 测试环境的 timer 是桩（不会触发 flush），故用 close()（其内部 flush）验证持久化路径。
+      h3.api.close();
+      const savedAfter = JSON.parse(readFileSync(path, 'utf8'));
+      assert('载入清洗：纯文本改写也会标记落盘（条数不变同样生效）',
+        !savedAfter.pool.some((p) => String(p.text).includes('记忆片段')), JSON.stringify(savedAfter.pool.map((p) => p.text.slice(0, 12))));
     }
 
     console.log(`\n结果：${passed} 通过 / ${failed} 失败`);

@@ -246,6 +246,12 @@ checks.push(['LLM 调用全部按队列消费', queue.length === 0]);
   checks.push(['未超期候选保留', raw2.includes('fresh-1')]);
   checks.push(['已有终态（已拒绝）的旧候选不被清理', raw2.includes('rejected-1') && raw2.includes('rej-rec')]);
   checks.push(['过期累计计数暴露给界面', (api2.stats().auto?.expiredTotal ?? 0) >= 1]);
+  // 过期清理可关闭（autoRejectAfterMs=0）：再放一条超期候选，关闭后必须原样保留
+  writeRec({ id: 'stale-2', at: nowMs - 9 * 86400000, type: 'suggest', candidate: { type: 'persona-add', section: 'traits', content: '超期候选②（回归）' }, by: 'auto', status: 'pending' });
+  const api3 = mod.apply(ctx, { ledgerPath: ledger2, skillsDir: join(dir2, 'skills3'), provider: 'x', model: 'y', maxConflict: 0.5, autoSuggest: false, autoHour: 22, autoRejectAfterMs: 0 });
+  const exp0 = api3.expireStale();
+  checks.push(['过期清理可关闭（autoRejectAfterMs=0）',
+    exp0.expired === 0 && exp0.removed === 0 && readFileSync(ledger2, 'utf8').includes('stale-2'), JSON.stringify(exp0)]);
   rmSync(dir2, { recursive: true, force: true });
 }
 
