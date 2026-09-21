@@ -146,13 +146,13 @@ export function apply(ctx, rawConfig) {
     }));
     reg(defineTool({
       name: 'persona_update',
-      description: '增补/修正一条已存在的人格条目（按 id）。修改会记录修改者与时间并留档；阶段四自进化系统将以 evolution 身份调用。',
+      description: '增补/修正一条已存在的人格条目（按 id）。修改会记录修改者与时间并留档；自进化系统会以 evolution 身份调用。',
       parameters: {
         id: { type: 'string', required: true, description: '条目 id（persona_view 中可见，或用 persona 服务 history 查询）' },
         content: { type: 'string', description: '新内容（省略则不修改）' },
         importance: { type: 'number', description: '重要度 0..1' },
         confidence: { type: 'number', description: '置信度 0..1' },
-        by: { type: 'string', description: '修改者标识（默认 user；阶段四自进化用 evolution）' },
+        by: { type: 'string', description: '修改者标识（默认 user；自进化用 evolution）' },
       },
       output: toolOutput({
         type: 'object', additionalProperties: false,

@@ -78,6 +78,20 @@ window.__ModuleLoader__.load({
             if (txt && !txt.startsWith('Current runtime context')) out.push({ role: 'system', text: txt, time: ev.time ?? 0, key: `e${ev.seq}` });
           }
           // 其余 kind（skill-catalog 等系统注入）一律不渲染
+        } else if (ev?.type === 'command/run') {
+          //  斜杠命令通道：宿主执行 /命令 时把 command/run、command/done 作为 flow node
+          // 写进会话日志（不产生 assistant 回复）。专属 UI 原先不渲染这两类事件，于是"命令执行了
+          // 但界面毫无反应"——这里按系统小字上屏，命令的输入与结果因此可见。
+          const cname = String(ev.data?.name ?? '');
+          const cargsRaw = typeof ev.data?.args === 'string' ? ev.data.args : '';
+          const cargs = cargsRaw.length > 600 ? `${cargsRaw.slice(0, 600)}…` : cargsRaw;
+          if (cname) out.push({ role: 'system', text: `⌘ /${cname}${cargs ? ` ${cargs}` : ''}`, time: ev.time ?? 0, key: `e${ev.seq}`, cmd: 'run' });
+        } else if (ev?.type === 'command/done') {
+          const failed = ev.data?.kind === 'error';
+          const ctext = typeof ev.data?.text === 'string' && ev.data.text.trim() !== ''
+            ? ev.data.text
+            : (failed ? '命令执行失败' : '命令已完成');
+          out.push({ role: 'system', text: ctext, time: ev.time ?? 0, key: `e${ev.seq}`, cmd: failed ? 'err' : 'ok' });
         } else if (ev?.type === 'assistant/message') {
           let text = ''; let reasoning = ''; const tools = [];
           for (const b of blocks) {
@@ -100,6 +114,70 @@ window.__ModuleLoader__.load({
         }
       }
       return out.filter((m) => !(m.role === 'assistant' && !m.text && !m.reasoning && m.tools.length === 0));
+    }
+    /**
+     *  运行态卡片：从**会话事件流**推导待办与工作流状态。
+     * 只读取日志里已有的持久事实，不新增 RPC、不缓存宿主对象：
+     *  - `todo/write`：模型每次 todo_write 整表覆盖（last-write-wins），取最新一条即当前清单；
+     *    `turn/start` 清空清单——与官方 todos 投影单元的 apply 完全一致，漏掉它会让上一轮的
+     *    旧待办一直挂在界面上；
+     *  - `tool-workflow/run-start | agent-start | agent-end | run-end`：按 runId 折叠一次工作流运行
+     *    （事件形状取自 dsh-client-ui-workflow-run 的同名事件族）。
+     * 事件元素可能是 `{ event }` 信封（session.history）或事件本体（mux 缓存），两种形状都兼容；
+     * 任何字段缺失都只跳过该条，不抛出——渲染层不能因日志异常整体挂掉。
+     * 本函数只覆盖"已加载的事件页"；权威待办另有投影通道（todosMap），由渲染层优先取用。
+     * @returns {{todos: Array|null, runs: Array}}
+     */
+    function deriveRunCards(events) {
+      let todos = null;
+      const runs = new Map();
+      for (const x of events) {
+        const ev = x?.event ?? x;
+        const type = ev?.type;
+        if (type === 'todo/write') {
+          const list = ev.data?.todos;
+          todos = Array.isArray(list) ? list.filter((t) => t && typeof t.content === 'string') : null;
+        } else if (type === 'turn/start') {
+          todos = null; // 与官方 todos 投影一致：新回合开始即清空清单
+        } else if (type === 'tool-workflow/run-start') {
+          const d = ev.data ?? {};
+          if (d.runId !== undefined) {
+            runs.set(String(d.runId), { runId: String(d.runId), name: String(d.name ?? '工作流'), members: [], stopReason: undefined });
+          }
+        } else if (type === 'tool-workflow/agent-start') {
+          const d = ev.data ?? {};
+          const run = runs.get(String(d.runId));
+          if (run) run.members.push({ seq: d.seq, label: String(d.label ?? ''), phase: d.phase === undefined || d.phase === null ? null : String(d.phase), outcome: undefined });
+        } else if (type === 'tool-workflow/agent-end') {
+          const d = ev.data ?? {};
+          const run = runs.get(String(d.runId));
+          if (run) for (const m of run.members) if (m.seq === d.seq) m.outcome = d.outcome;
+        } else if (type === 'tool-workflow/run-end') {
+          const d = ev.data ?? {};
+          const run = runs.get(String(d.runId));
+          if (run) run.stopReason = d.stopReason;
+        }
+      }
+      return { todos, runs: [...runs.values()] };
+    }
+    /** 工作流状态文案（与官方 stopReason/outcome 取值对齐）。 */
+    const WF_STATE = {
+      running: ['运行中', 'warn'], completed: ['已完成', 'good'], cancelled: ['已取消', 'dim'],
+      failed: ['失败', 'err'], error: ['失败', 'err'], interrupted: ['已中断', 'dim'],
+    };
+    /** 后台作业状态文案（取值来自 session/jobs 帧的 taskView.status）。 */
+    const JOB_STATE = {
+      running: ['运行中', 'warn'], stopping: ['停止中', 'warn'], completed: ['已完成', 'good'],
+      killed: ['已停止', 'dim'], failed: ['失败', 'err'],
+    };
+    /** 作业耗时文案：运行中显示"已运行 X"，已结束显示"用时 X"；时间戳缺失返回空串。 */
+    function jobDurationOf(job) {
+      const started = Number(job?.startedAt ?? 0);
+      if (!started) return '';
+      const finished = Number(job?.finishedAt ?? 0);
+      const ms = (finished > 0 ? finished : Date.now()) - started;
+      if (!Number.isFinite(ms) || ms < 0) return '';
+      return `${finished > 0 ? '用时 ' : '已运行 '}${fmtDur(ms)}`;
     }
     // 会话/工作区标题：仿 DSH 原生——空白会话显示"新会话"；否则优先持久化标题，cwd 尾段，最后 sessionId 短名
     function sessionTitleOf(item) {
@@ -451,6 +529,33 @@ window.__ModuleLoader__.load({
 .arc-led-exp{white-space:pre-wrap;word-break:break-word;font-family:var(--arc-mono);font-size:11px;line-height:1.65;color:var(--arc-dim);padding:6px 10px;border-top:1px dashed var(--arc-bd);max-height:170px;overflow-y:auto}
 .arc-led-ops{margin-left:auto;display:flex;gap:4px;flex:none}
 /* ---- 审批卡（仿 DSH 本体 ApprovalPanel：warn 描边卡 + 条头 + 拒绝/允许一次） ---- */
+/* ---- 运行态卡片（待办 / 子代理 / 后台作业 / 工作流） ---- */
+.arc-run-wrap{border:1px solid var(--arc-bd);background:var(--arc-l1);border-radius:12px;margin:10px 20px 0;overflow:hidden}
+.arc-run-bar{display:flex;align-items:center;gap:8px;padding:6px 10px;flex-wrap:wrap}
+.arc-run-bar .ttl{font-size:11.5px;font-weight:700;color:var(--arc-dim)}
+.arc-run-pill{font-size:11px;color:var(--arc-dim);background:var(--arc-ol);border:1px solid var(--arc-bd);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.arc-run-toggle{margin-left:auto;background:transparent;border:none;color:var(--arc-faint);font-size:11px;cursor:pointer;padding:2px 4px}
+.arc-run-toggle:hover{color:var(--arc-tx)}
+.arc-run-body{display:flex;flex-direction:column;gap:6px;padding:0 10px 8px;max-height:32vh;overflow-y:auto}
+.arc-run-sec{display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--arc-bd);padding-top:6px}
+.arc-run-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--arc-dim);min-width:0}
+.arc-run-row.wrap{flex-wrap:wrap}
+.arc-run-row .tx{color:var(--arc-tx);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arc-run-row .dim{color:var(--arc-faint);font-size:11px;white-space:nowrap}
+.arc-run-row .ic{font-size:11px;width:14px;text-align:center}
+.arc-run-row.done .tx{color:var(--arc-faint);text-decoration:line-through}
+.arc-run-row.doing .tx{color:var(--arc-warn)}
+.arc-run-row .dot{width:7px;height:7px;border-radius:50%;background:var(--arc-faint);flex:0 0 auto}
+.arc-run-row .dot.on{background:var(--arc-good)}
+.arc-run-row .st{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--arc-bd);white-space:nowrap}
+.arc-run-row .st.good{color:var(--arc-good);border-color:var(--arc-good)}
+.arc-run-row .st.warn{color:var(--arc-warn);border-color:var(--arc-warn)}
+.arc-run-row .st.err{color:var(--arc-err);border-color:var(--arc-err)}
+.arc-run-row .st.dim{color:var(--arc-faint)}
+.arc-run-row .mem{font-size:10.5px;color:var(--arc-faint);border:1px solid var(--arc-bd);border-radius:6px;padding:0 5px;white-space:nowrap}
+.arc-run-row .mem.done{color:var(--arc-good);border-color:var(--arc-good)}
+.arc-run-open{background:transparent;border:1px solid var(--arc-bd);color:var(--arc-dim);font-size:11px;border-radius:6px;padding:1px 8px;cursor:pointer;flex:0 0 auto}
+.arc-run-open:hover{color:var(--arc-tx);border-color:var(--arc-brand)}
 .arc-aprv-wrap{display:flex;flex-direction:column;gap:8px;padding:10px 20px 0}
 /* 功能页共用浮层（ 起审批卡与提问卡同层堆叠，fixed 于底部中央上方，避开记录面板） */
 .arc-float-stack{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--arc-dock-h, 36px));z-index:900;width:min(560px,calc(100vw - 48px));display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto}
@@ -552,6 +657,44 @@ window.__ModuleLoader__.load({
           return normResult(res);
         } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
       }
+      /**
+       *  斜杠命令通道用到的客户端 remote 服务。该服务由 `@deepseek-ai/dsh-api-gateway`
+       * 的客户端半部提供（`super(ctx, "remote")`），`commands.list` / `commands.execute` 由 Typert
+       * 远程代理挂在上面的 commands 命名空间；`modules/control/package.json` 的 `dsh.client.inject`
+       * 已声明依赖 dsh-client-runtime，宿主装配客户端模块表时会先把这条链加载好。
+       * 惰性获取、不写进插件 inject：若声明为硬依赖而 remote 未能就绪，整个专属界面会进入等待
+       * 而不渲染；取不到时命令通道自动降级为"按普通消息发送"，界面其余部分完全不受影响。
+       */
+      const getRemote = () => { try { return ctx.get('remote'); } catch { return undefined; } };
+      /**
+       *  `/export` 的浏览器侧动作。
+       * 官方 dsh-session-log-export 的宿主命令只回一句 "Session log download requested."，真正的下载由
+       * 它的客户端插件观察 `command/executed` 后触发；专属 UI 没有那个插件，于是命令"执行成功"却没有任何
+       * 文件落地。这里按同一契约补上：同源端点 + `a[download]`，先 HEAD 探测，失败时明确提示而不是静默。
+       * @param sessionId - 要导出的会话（含其后代）。
+       * @param showToast - 界面提示函数。
+       */
+      async function triggerSessionExport(sessionId, showToast) {
+        try {
+          const sid = String(sessionId ?? '');
+          if (!sid) return;
+          if (typeof document === 'undefined' || typeof location === 'undefined') return;
+          const url = new URL('/api/session.export', location.origin);
+          url.searchParams.set('sessionId', sid);
+          url.searchParams.set('includeDescendants', 'true');
+          const head = await fetch(url.toString(), { method: 'HEAD' });
+          if (!head.ok) { showToast(`导出失败：HTTP ${head.status}`); return; }
+          const a = document.createElement('a');
+          a.href = url.toString();
+          a.download = `dsh-session-${sid.replace(/[^A-Za-z0-9_-]/g, '_')}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          showToast('会话日志导出已开始（浏览器下载）');
+        } catch (error) {
+          showToast(`导出失败：${String((error && error.message) || error)}`);
+        }
+      }
 
       // ===== 浏览器端错误捕获（）：window error / unhandledrejection → ledger 报错面板 =====
       if (typeof window !== 'undefined' && typeof ctx.effect === 'function') {
@@ -606,6 +749,78 @@ window.__ModuleLoader__.load({
           e('div', { style: { fontSize: 13.5 } }, text),
           sub ? e('div', { className: 'arc-note' }, sub) : null);
       }
+      /**
+       *  运行态卡片：待办 / 子代理 / 后台作业 / 工作流（当前会话）。
+       * 位置取舍：四类状态合并为输入框上方一块可折叠区域，与审批卡、提问卡同域——它们都属于
+       * "此刻正在发生什么"。不改消息流渲染是因为那里承担分页、乐观占位与流式增量，回归面大得多；
+       * 而运行态数据本身与消息顺序无关。无任何内容时返回 null，不占位、不影响布局。
+       * 四类各自的来源：待办与工作流来自会话事件（deriveRunCards），作业来自 session/jobs 帧，
+       * 子代理来自 session.list 中 origin==='subagent' 的子会话。
+       */
+      const RunCards = React.memo(function RunCards({ todos, runs, jobs, subagents, open, onToggle, onOpenSession }) {
+        const todoList = Array.isArray(todos) ? todos : [];
+        const runList = Array.isArray(runs) ? runs : [];
+        const jobList = Array.isArray(jobs) ? jobs : [];
+        const subList = Array.isArray(subagents) ? subagents : [];
+        if (todoList.length === 0 && runList.length === 0 && jobList.length === 0 && subList.length === 0) return null;
+        const todoDone = todoList.filter((t) => t.status === 'completed').length;
+        const busyJobs = jobList.filter((j) => j.status === 'running' || j.status === 'stopping').length;
+        const busyRuns = runList.filter((r) => r.stopReason === undefined).length;
+        const busySubs = subList.filter((s) => s.running === true).length;
+        const pills = [];
+        if (todoList.length > 0) pills.push(`📋 待办 ${todoDone}/${todoList.length}`);
+        if (subList.length > 0) pills.push(`🤖 子代理 ${subList.length}${busySubs > 0 ? ` · 运行 ${busySubs}` : ''}`);
+        if (jobList.length > 0) pills.push(`⚙️ 作业 ${jobList.length}${busyJobs > 0 ? ` · 运行 ${busyJobs}` : ''}`);
+        if (runList.length > 0) pills.push(`🧩 工作流 ${runList.length}${busyRuns > 0 ? ` · 运行 ${busyRuns}` : ''}`);
+        return e('div', { className: 'arc-run-wrap' },
+          e('div', { className: 'arc-run-bar' },
+            e('span', { className: 'ttl' }, '运行态'),
+            ...pills.map((p, i) => e('span', { key: i, className: 'arc-run-pill' }, p)),
+            e('button', { className: 'arc-run-toggle', title: open ? '收起运行态卡片' : '展开运行态卡片', onClick: onToggle }, open ? '▾ 收起' : '▴ 展开')),
+          open
+            ? e('div', { className: 'arc-run-body' },
+                todoList.length > 0
+                  ? e('div', { className: 'arc-run-sec' },
+                      ...todoList.slice(0, 30).map((t, i) => e('div', { key: i, className: `arc-run-row todo ${t.status === 'completed' ? 'done' : t.status === 'in_progress' ? 'doing' : ''}` },
+                        e('span', { className: 'ic' }, t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '▶' : '⏳'),
+                        e('span', { className: 'tx' }, String(t.content)))))
+                  : null,
+                subList.length > 0
+                  ? e('div', { className: 'arc-run-sec' },
+                      ...subList.slice(0, 20).map((s) => e('div', { key: s.sessionId, className: 'arc-run-row' },
+                        e('span', { className: `dot${s.running ? ' on' : ''}` }),
+                        e('span', { className: 'tx' }, truncate(s.title, 44)),
+                        e('span', { className: 'dim' }, s.running ? '运行中' : '空闲'),
+                        e('button', { className: 'arc-run-open', title: '切换到这个子代理会话', onClick: () => onOpenSession(s.sessionId) }, '打开'))))
+                  : null,
+                jobList.length > 0
+                  ? e('div', { className: 'arc-run-sec' },
+                      ...jobList.slice(0, 20).map((j) => {
+                        const st = JOB_STATE[j.status] ?? [String(j.status ?? '—'), 'dim'];
+                        return e('div', { key: j.id, className: 'arc-run-row' },
+                          e('span', { className: `st ${st[1]}` }, st[0]),
+                          e('span', { className: 'tx' }, truncate(String(j.label ?? j.id), 60)),
+                          e('span', { className: 'dim' }, jobDurationOf(j)),
+                          j.detail ? e('span', { className: 'dim', title: String(j.detail) }, `· ${truncate(String(j.detail), 36)}`) : null);
+                      }))
+                  : null,
+                runList.length > 0
+                  ? e('div', { className: 'arc-run-sec' },
+                      ...runList.slice(0, 10).map((r) => {
+                        const st = r.stopReason === undefined ? WF_STATE.running : (WF_STATE[r.stopReason] ?? [String(r.stopReason), 'dim']);
+                        const done = r.members.filter((m) => m.outcome !== undefined).length;
+                        return e('div', { key: r.runId, className: 'arc-run-row wrap' },
+                          e('span', { className: `st ${st[1]}` }, st[0]),
+                          e('span', { className: 'tx' }, truncate(String(r.name), 60)),
+                          e('span', { className: 'dim' }, `成员 ${done}/${r.members.length}`),
+                          ...r.members.slice(0, 6).map((m, i) => e('span', { key: i, className: `mem${m.outcome !== undefined ? ' done' : ''}`, title: m.label },
+                            `${m.phase ? `[${m.phase}] ` : ''}${truncate(m.label, 18)}`)),
+                          r.members.length > 6 ? e('span', { className: 'dim' }, `+${r.members.length - 6}`) : null);
+                      }))
+                  : null,
+              )
+            : null);
+      });
 
       /**
        * 聊天输入框（ 性能修复）。
@@ -617,16 +832,19 @@ window.__ModuleLoader__.load({
        * 放在 apply 作用域（而非 App 内部）是必须的——若定义在 App 里，每次渲染都会产生新组件类型导致输入框被卸载重建。
        * props 多为 App 内联闭包（每次 App 渲染都是新引用），故 memo 的收益有限；真正的修复是状态隔离本身。
        */
-      const ChatComposer = React.memo(function ChatComposer({ onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage }) {
+      const ChatComposer = React.memo(function ChatComposer({ onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage, cmdBusy }) {
         const [draft, setDraft] = useState('');
         const submit = () => { void sendText(draft).then((ok) => { if (ok) setDraft(''); }); };
+        //：命令执行期间只拦"命令提交"——长命令（如 /compact）要在宿主侧跑到完成，
+        // 重复提交会重复执行；而普通消息不受影响，用户仍可正常对话。
+        const draftIsCommand = draft.trim().startsWith('/');
         return e('div', { className: 'arc-inp' },
           e('button', { className: 'arc-img-btn', disabled: uploading, title: '上传/粘贴图片（AI 识别）', onClick: () => fileRef.current?.click() }, uploading ? '…' : '🖼️'),
           e('input', { ref: fileRef, type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: { display: 'none' }, onChange: (ev) => { if (ev.target.files?.[0]) void uploadImage(ev.target.files[0]); ev.target.value = ''; } }),
-          e('input', { value: draft, placeholder: '输入消息，Enter 发送；可直接粘贴图片…', onChange: (ev) => setDraft(ev.target.value), onPaste, onKeyDown: (ev) => { if (ev.key === 'Enter' && !ev.nativeEvent?.isComposing) submit(); } }),
+          e('input', { value: draft, placeholder: cmdBusy ? '命令执行中，请稍候…' : '输入消息，或 /命令（如 /goal、/export）；Enter 发送，可直接粘贴图片…', onChange: (ev) => setDraft(ev.target.value), onPaste, onKeyDown: (ev) => { if (ev.key === 'Enter' && !ev.nativeEvent?.isComposing) submit(); } }),
           replying
             ? e('button', { onClick: () => void stopGenerate() }, '⏹ 停止')
-            : e('button', { onClick: submit }, '发送'),
+            : e('button', { onClick: submit, disabled: cmdBusy && draftIsCommand }, cmdBusy && draftIsCommand ? '命令执行中…' : '发送'),
         );
       });
 
@@ -753,7 +971,7 @@ window.__ModuleLoader__.load({
       });
 
       // ================= 应用 =================
-      function App() {
+      function App({ getRemote }) {
         const [page, setPage] = useState('chat');
         const [currentId, setCurrentId] = useState(MAIN_SESSION_ID);
         const [sessions, setSessions] = useState([]);
@@ -764,6 +982,15 @@ window.__ModuleLoader__.load({
         const [model, setModel] = useState('');
         const [status, setStatus] = useState('连接中…');
         const [toast, setToast] = useState('');
+        //  运行态卡片（待办 / 工作流 / 后台作业 / 子代理）——数据全部来自已有事件流与 mux 帧，
+        // 不新增任何宿主接口：待办与工作流由 renderChatMessages 从已加载事件推导，作业来自 session/jobs 帧，
+        // 子代理来自 session.list 里 origin==='subagent' 的子会话。无内容时整块不渲染。
+        const [jobsMap, setJobsMap] = useState({}); // sessionId → 作业视图数组
+        // 权威待办（session projection 的 todos 键；比"从事件页推导"覆盖更全，且与官方投影同源）。
+        // 只记录"确实收到过投影"的会话——属性存在即为权威（值可以为 null，表示当前回合没有清单）。
+        const [todosMap, setTodosMap] = useState({});
+        const [runCards, setRunCards] = useState({ todos: null, runs: [] });
+        const [runOpen, setRunOpen] = useState(true);
         const [confirm, setConfirm] = useState(null); // {msg, onYes}
         const [shuttingDown, setShuttingDown] = useState(false);
         const [newSessionOpen, setNewSessionOpen] = useState(false);
@@ -813,11 +1040,82 @@ window.__ModuleLoader__.load({
           if (el.scrollTop < 60 && !loadingOlderRef.current) void loadOlder();
         };
         const lastUnreadRef = useRef(0);
+        const runSigRef = useRef(''); // 运行态卡片内容签名：内容未变则跳过 setState（防整树重渲染）
+        const cmdCatalogRef = useRef(null); // 斜杠命令目录缓存 { at, names }，30s 有效
+        //  命令串行化：`/compact` 这类命令会在宿主侧同步跑到完成（可能数十秒），
+        // 期间用户再按 Enter 会并发触发第二条命令（例如重复压缩）。这里以"开始时间戳"记录在跑状态，
+        // 0 表示空闲；超过护栏后自动失效，避免远端永挂时命令被永久锁死。
+        const cmdBusyRef = useRef(0);
+        const [cmdBusy, setCmdBusy] = useState(false);
         const notifiedOnceRef = useRef(false);
 
         //  性能修复：原为普通函数——App 每次重渲染都产生新引用，会击穿记录面板行组件的
         // React.memo（App 侧 3s tick 等会频繁 setState）。依赖仅 setToast（useState 的稳定 setter）。
         const showToast = useCallback((t) => { setToast(t); setTimeout(() => setToast(''), 3500); }, []);
+        /**
+         *  斜杠命令通道。
+         * 背景：DSH 0.1.1 的命令只有一条执行入口——客户端经 Typert remote 调 `commands.execute`；
+         * 宿主 `session.prompt` **不解析** "/" 前缀。专属 UI 原先没有该调用，于是用户在界面里输入
+         * `/goal …`、`/export`、`/compact` 等会被当作普通消息发给模型，命令静默失效。
+         * 语义（保守优先，未知输入行为与改动前完全一致）：
+         *  - 仅当输入以 "/" 开头、无待发图片、且 remote 服务可用时进入本通道；
+         *  - 命令名取自宿主注册表（`commands.list`，30s 缓存）；目录里没有该名字 → 返回 false，交回普通消息发送；
+         *  - 目录整体取不到（通道异常）时才直接交给 `commands.execute` 判定，仍返回 undefined 就回退普通消息；
+         *  - 执行结果由会话日志中的 `command/run`、`command/done` 事件上屏（见 collectMessages）。
+         * @param line - 完整命令行（含前导 "/"）。
+         * @param sid - 当前会话 id。
+         * @returns 已按命令处理返回 true（调用方清空输入框）；应回退为普通消息返回 false。
+         */
+        const runSlashCommand = async (line, sid) => {
+          if (!sid) return false;
+          const name = (String(line).match(/^\/([A-Za-z0-9_-]{1,40})/) || [])[1];
+          if (!name) return false;
+          const remote = typeof getRemote === 'function' ? getRemote() : undefined;
+          const commands = remote && remote.commands;
+          if (!commands || typeof commands.execute !== 'function') return false; // 命令通道不可用 → 原行为
+          // 串行护栏：上一条命令仍在执行时吞掉本次输入并提示，避免长命令被并发执行两次
+          // （护栏 90s：远端若一直不返回也自动解锁，不让输入被永久挡住）。
+          if (cmdBusyRef.current !== 0 && Date.now() - cmdBusyRef.current < 90000) {
+            showToast('上一条命令仍在执行，请稍候再发');
+            return true;
+          }
+          cmdBusyRef.current = Date.now();
+          setCmdBusy(true);
+          try {
+            let catalog = cmdCatalogRef.current;
+            if (!catalog || Date.now() - catalog.at > 30000) {
+              const next = { at: Date.now(), names: [] };
+              try {
+                const lr = normResult(await commands.list(sid));
+                if (lr.ok === true && Array.isArray(lr.value)) {
+                  next.names = lr.value.map((c) => String((c && c.name) ?? '')).filter(Boolean);
+                }
+              } catch { /* 目录不可用：names 留空，交给 execute 判定 */ }
+              catalog = next;
+              cmdCatalogRef.current = catalog;
+            }
+            const known = catalog.names.length === 0 || catalog.names.includes(name);
+            if (!known) return false; // 宿主注册表里没有这个命令 → 当作普通消息（例如用户就想发 "/etc/hosts"）
+            const res = normResult(await commands.execute(sid, String(line), []));
+            if (res.ok !== true) { showToast(`命令执行失败：${res.error || '传输错误'}`); return true; }
+            if (res.value === undefined) {
+              // 目录未知（未能取到）且宿主也未识别 → 保守回退，不打扰用户
+              if (catalog.names.length === 0) return false;
+              showToast(`命令未识别：${line}`);
+              return true;
+            }
+            // `/export` 的下载动作在官方由客户端插件观察 command/executed 后触发；专属 UI 没有该插件，
+            // 这里按同一契约补上（同源端点 + a[download]），否则用户只会看到一句英文提示却没有文件。
+            if (name === 'export') void triggerSessionExport(sid, showToast);
+            return true; // 已受理：结果由 command/run、command/done 事件上屏
+          } catch (error) {
+            showToast(`命令执行异常：${String((error && error.message) || error)}`);
+            return true;
+          } finally {
+            cmdBusyRef.current = 0;
+            setCmdBusy(false);
+          }
+        };
         const askConfirm = (msg, onYes) => setConfirm({ msg, onYes });
         const stateRef = useRef({ currentId });
         stateRef.current.currentId = currentId;
@@ -940,6 +1238,15 @@ window.__ModuleLoader__.load({
               msgs.push({ role: 'assistant', text: fl.text, reasoning: fl.reasoning, tools: fl.tools, time: fl.time, key: 'inflight', streaming: true });
             }
           }
+          //  运行态卡片：从同一批已加载事件推导待办/工作流（零额外请求）。
+          // 用序列化签名比较，内容未变时不 setState——事件缓存每次渲染都重建对象，
+          // 直接赋值会让 App 每次 loadTail / 流式分片都多一次整树重渲染。
+          const rc = deriveRunCards(events);
+          const rcSig = JSON.stringify(rc);
+          if (rcSig !== runSigRef.current) {
+            runSigRef.current = rcSig;
+            setRunCards(rc);
+          }
           setMessages(msgs);
           if (!fl && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') markReplying(false);
         }, []);
@@ -979,6 +1286,18 @@ window.__ModuleLoader__.load({
               if (ev.seq > c.tailSeq) c.tailSeq = ev.seq;
             }
             c.hasMore = r.value.hasMore === true;
+            //  待办投影：session.history 的返回值自带 projections 快照（asOfSeq），
+            // 它覆盖整条日志，比"从已加载事件页推导"更权威——打开会话、轮询兜底时都会刷新它。
+            // 属性存在即为权威（值可以是 null = 当前回合没有清单），因此即便为 null 也要落键。
+            const pv = r.value.projections?.values;
+            if (pv && Object.prototype.hasOwnProperty.call(pv, 'todos')) {
+              const todoValue = Array.isArray(pv.todos) ? pv.todos.filter((t) => t && typeof t.content === 'string') : null;
+              setTodosMap((prev) => {
+                if (Object.prototype.hasOwnProperty.call(prev, sessionId)
+                  && JSON.stringify(prev[sessionId]) === JSON.stringify(todoValue)) return prev;
+                return { ...prev, [sessionId]: todoValue };
+              });
+            }
             if (changed || opts.beforeSeq !== undefined || opts.force === true) renderChatMessages(sessionId);
           }
           return c;
@@ -1138,6 +1457,35 @@ window.__ModuleLoader__.load({
           }
           if (f.type === 'approval/resolved') {
             setPendingApprovals((prev) => prev.filter((a) => !(a.approvalId === f.approvalId && a.sessionId === f.sessionId)));
+            return;
+          }
+          //  运行态卡片：后台作业帧（宿主在作业变动时经 mux 推送 session/jobs）。
+          // 与审批帧同样放在流式 gate 之前——轮询模式下作业状态也要保持实时；
+          // 内容未变时返回原对象，避免无谓的整树重渲染（该帧在作业心跳时可能重复到达）。
+          if (f.type === 'session/jobs') {
+            const jsid = String(f.sessionId ?? '');
+            if (!jsid) return;
+            const jobs = Array.isArray(f.jobs) ? f.jobs : [];
+            setJobsMap((prev) => {
+              const prevJobs = prev[jsid] ?? [];
+              if (JSON.stringify(prevJobs) === JSON.stringify(jobs)) return prev;
+              const next = { ...prev };
+              if (jobs.length === 0) delete next[jsid]; else next[jsid] = jobs;
+              return next;
+            });
+            return;
+          }
+          //  运行态卡片：待办投影帧（宿主在 projection 变化时推送 session/projection）。
+          // 与 session/jobs 同样放在流式 gate 之前；只认 todos 键，其余投影（token/目标/权限等）直接跳过。
+          if (f.type === 'session/projection') {
+            if (f.key !== 'todos') return;
+            const tsid = String(f.sessionId ?? '');
+            if (!tsid) return;
+            const value = Array.isArray(f.value) ? f.value.filter((t) => t && typeof t.content === 'string') : null;
+            setTodosMap((prev) => {
+              if (Object.prototype.hasOwnProperty.call(prev, tsid) && JSON.stringify(prev[tsid]) === JSON.stringify(value)) return prev;
+              return { ...prev, [tsid]: value };
+            });
             return;
           }
           //  提问帧（ask_user_question / exit_plan_mode；与 DSH 本体同源）：
@@ -1496,6 +1844,23 @@ window.__ModuleLoader__.load({
           const finalText = [t, ...imgRefs].filter(Boolean).join('\n').trim();
           if (!finalText || !stateRef.current.currentId) return false;
           const sid = stateRef.current.currentId;
+          //  斜杠命令通道（语义见 runSlashCommand 注释）：无待发图片时，已注册的 /命令
+          // 交宿主执行、不发给模型；未识别或通道不可用一律回退到下面的普通消息路径（行为不变）。
+          // 命令串行护栏在此提前拦截（返回 false 保留输入，用户可稍后重发）；普通消息不受此限。
+          if (pasteImgs.length === 0 && t.startsWith('/')) {
+            if (cmdBusyRef.current !== 0 && Date.now() - cmdBusyRef.current < 90000) {
+              showToast('上一条命令仍在执行，请稍候再发');
+              return false;
+            }
+            const ran = await runSlashCommand(t, sid);
+            if (ran) {
+              stickRef.current = true;
+              // 命令不产生 user/message 事件（会话里的「⌘ /命令」与结果来自 command/run、command/done），
+              // 因此这里不做乐观占位；补一次增量拉取，保证轮询模式下结果尽快出现（流式下 mux 已推送）。
+              setTimeout(() => { void loadTail(sid, { probeOnly: true }); }, 300);
+              return true;
+            }
+          }
           //  UX 修复：点击发送即刻上屏——乐观占位改为在第一个 await 之前同步插入，
           // 上屏不再等待 session.prompt 的服务端处理（唤醒/入队/忙时排队时延不定，曾导致消息
           // 时快时慢地延迟出现）。checkReady / session.prompt 改为其后异步投递：
@@ -1841,7 +2206,21 @@ window.__ModuleLoader__.load({
                 pasteImgs.map((p) => e('div', { key: p.key, className: 'arc-paste-item' },
                   e('img', { src: p.thumb, alt: '待发送图片' }),
                   e('button', { className: 'arc-paste-x', title: '移除', onClick: () => setPasteImgs((prev) => prev.filter((x) => x.key !== p.key)) }, '✕')))),
-              e(ChatComposer, { key: 'inp', onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage }),
+              //  运行态卡片（待办/子代理/作业/工作流）：无内容时组件自身返回 null，不占位
+              e(RunCards, {
+                key: 'run',
+                // 待办：宿主投影优先（覆盖整条日志、与官方同源），未收到投影的会话回退到事件推导
+                todos: Object.prototype.hasOwnProperty.call(todosMap, currentId) ? todosMap[currentId] : runCards.todos,
+                runs: runCards.runs,
+                jobs: jobsMap[currentId] ?? [],
+                subagents: sessions
+                  .filter((s) => s && s.origin === 'subagent' && String(s.parentSessionId ?? '') === String(currentId ?? ''))
+                  .map((s) => ({ sessionId: String(s.sessionId), running: s.running === true, title: sessionTitleOf(s) })),
+                open: runOpen,
+                onToggle: () => setRunOpen((o) => !o),
+                onOpenSession: (id) => void openSession(id),
+              }),
+              e(ChatComposer, { key: 'inp', onPaste, sendText, replying, stopGenerate, uploading, fileRef, uploadImage, cmdBusy }),
             ],
             e(LedgerDock, { showToast }),
           ),
@@ -2710,9 +3089,9 @@ window.__ModuleLoader__.load({
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: preCap, onChange: (ev) => setPreCap(ev.target.value), placeholder: `如 120000（120 秒；限 ${PRE_CAP_MIN / 1000} 秒 ~ ${PRE_CAP_MAX / 60000} 分钟，乱填超大值会致每回合思考瞬间被砍）` }),
               e('input', { className: 'arc-text', style: { marginTop: 6 }, value: preTok, onChange: (ev) => setPreTok(ev.target.value), placeholder: `如 4000（越小完成越快；限 ${PRE_TOK_MIN} ~ ${PRE_TOK_MAX}）` }),
               e('p', { className: 'arc-hint' }, '兜底间隔：无事件时多久强制思考一轮；maxTokens：时间驱动决策预算；对话前置思考时限：每次对话消息的前置思考最晚多久完成（超时中止并在活动流留痕）；对话前置思考预算：该思考单次 token 上限（4000 完成较快；改大更深入但更慢）。tick/模型等需改 cordis.patch.yml 后重启。')),
-            e(Card, { key: 'slp', title: '😴 睡眠/清醒期（2026-08-31，语义修正 09-03）' },
+            e(Card, { key: 'slp', title: '😴 睡眠/清醒期' },
               e('p', { className: 'dim' }, state?.sleep?.phase === 'asleep'
-                ? `用户睡眠状态持续 ≥30 分钟后进入睡眠期：思维循环完全暂停（无视降频开关、事件触发也跳过），定时任务照常触发并打断睡眠期。状态 TTL 到期≠醒来——仅用户发消息/状态清除或改标签/任务打断才解除（2026-09-03 修复夜行长睡眠被连环打扰）。`
+                ? `用户睡眠状态持续 ≥30 分钟后进入睡眠期：思维循环完全暂停（无视降频开关、事件触发也跳过），定时任务照常触发并打断睡眠期。状态 TTL 到期≠醒来——仅用户发消息/状态清除或改标签/任务打断才解除（避免长睡眠期间被连环打扰）。`
                 : `用户"睡眠中"状态持续 ≥${Math.round((stats?.config?.sleepEnterDelayMs ?? 1800000) / 60000)} 分钟且未来 ${Math.round((stats?.config?.sleepCheckWindowMs ?? 28800000) / 3600000)} 小时无 pending 任务 → 进入睡眠期（完全暂停主动循环）；解除=真实唤醒信号（用户发消息 / 状态清除或改标签 / 任务触发），状态 TTL 到期保持静默；仅无 TTL 的睡眠行超过 ${Math.round((stats?.config?.sleepMaxMs ?? 28800000) / 3600000)} 小时作为兜底强制解除；解除后进入 ${Math.round((stats?.config?.sleepCooldownMs ?? 10800000) / 3600000)} 小时强制清醒间隔（期间无法再睡眠）。`),
               state?.sleep?.phase === 'asleep'
                 ? e('div', { className: 't2', style: { marginTop: 6 } }, e(Badge, { text: `已睡眠 ${fmtDur(state.sleep.asleepForMs)} · 静默中（等真实唤醒）`, tone: 'dim' }))
@@ -3111,7 +3490,7 @@ window.__ModuleLoader__.load({
                         e(Btn, { label: '↩ 回滚', small: true, onClick: () => void doRollback(c) })),
                     );
                   }))),
-            e(Card, { key: 'sub', title: '🌙 潜意识 · 梦境引擎（2026-08-31）', right: e(Btn, { label: sub?.enabled ? '关闭' : '开启', kind: sub?.enabled ? 'danger' : 'primary', small: true, onClick: () => void toggleSubEnabled() }) },
+            e(Card, { key: 'sub', title: '🌙 潜意识 · 梦境引擎', right: e(Btn, { label: sub?.enabled ? '关闭' : '开启', kind: sub?.enabled ? 'danger' : 'primary', small: true, onClick: () => void toggleSubEnabled() }) },
               e('p', { className: 'dim' }, sub?.enabled
                 ? `睡眠期自动运行：高频记忆凝缩（${sub?.condenseModel === 'phi' ? '本地 Phi-3:mini' : 'DeepSeek'}）→ 异质碰撞（${sub?.llmModel === 'phi' ? '本地 Phi-3:mini' : 'DeepSeek'}）→ 置信度调度入进化队列；苏醒生成梦境呓语，话题相关时隐式注入。潜记忆池 ${sub?.poolCount ?? 0} 条，草案 ${sub?.draftCount ?? 0} 条，已碰撞 ${sub?.stats?.collisions ?? 0} 次，已导入进化 ${sub?.stats?.imported ?? 0} 条，自动微调 ${sub?.stats?.autoApplied ?? 0} 条，呓语注入 ${sub?.stats?.injects ?? 0} 次。`
                 : '已关闭：睡眠期不运行梦境引擎（可手动触发下方「跑一次梦境」）。'),
@@ -3922,7 +4301,7 @@ window.__ModuleLoader__.load({
       }
 
       // ===== 注册：整体替换 root（priority -100 shadow 出厂 z5） =====
-      slots.inject('root', () => slots.register({ name: 'root', id: 'archive-ui-root', priority: -100 }, () => e(App)));
+      slots.inject('root', () => slots.register({ name: 'root', id: 'archive-ui-root', priority: -100 }, () => e(App, { getRemote })));
       try { if (typeof document !== 'undefined' && document.body) document.body.setAttribute('data-arc-ui', 'ready'); } catch { /* ignore */ }
       // 原生设置页中的面板占位（root 替换后不可见，保留无害）
       slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'archive-control', order: 1000, label: '智能体总控' }, () => e('div', null, '智能体总控已内置于全新主界面')));
