@@ -58,6 +58,37 @@ window.__ModuleLoader__.load({
      * 2) assistant/message 聚合为单条复合消息：text=回答 / reasoning=思考过程（折叠区）/ tool=工具调用列表；
      * 3) assistant/chunk 流式增量不在此展开（由 SSE 的 inFlight 流式条目实时展示，历史回放时以 assistant/message 为准）。
      */
+    /**
+     *  目标类引擎注入的界面改写。
+     * 背景：引擎在目标阻塞/结束时以 plugin 来源注入一段**面向模型的指令**：
+     *   `<goal_blocked>` 换行后是 `Objective: "…"` / `Blocked: "…"`，再紧接一段英文收尾要求
+     *   （"The goal is marked blocked and this autonomous run is ending. Write the closing message…"）。
+     * 专属 UI 的 plugin 注入规则原本只剔除 runtime-context，于是这段英文指令原样显示给了用户
+     * （ 实机观察到 1 条，属内部文本外露）。这里改写为简洁中文提示：保留目标与原因，
+     * 丢弃给模型的指令段。
+     * @param text - plugin 来源注入的正文。
+     * @returns 改写后的中文提示；不是目标类注入时返回 null（调用方按原样处理）。
+     */
+    function goalNoticeOf(text) {
+      const raw = String(text ?? '');
+      const head = raw.match(/^<goal_(blocked|complete|paused|cleared|updated)>\s*/);
+      if (!head) return null;
+      const body = raw.slice(head[0].length);
+      const field = (name) => {
+        const m = body.match(new RegExp(`(?:^|\\n)\\s*${name}:\\s*"([\\s\\S]*?)"\\s*(?:\\n|$)`));
+        return m ? m[1].trim() : '';
+      };
+      const labels = {
+        blocked: '⛔ 目标已标为阻塞', complete: '✅ 目标已完成', paused: '⏸ 目标已暂停',
+        cleared: '🗑 目标已清除', updated: '✏️ 目标已更新',
+      };
+      const lines = [labels[head[1]] ?? 'ℹ️ 目标状态变化'];
+      const objective = field('Objective');
+      const reason = field('Blocked') || field('Reason');
+      if (objective) lines.push(`目标：${objective}`);
+      if (reason) lines.push(`原因：${reason.length > 400 ? `${reason.slice(0, 400)}…` : reason}`);
+      return lines.join('\n');
+    }
     function collectMessages(events, seqMap) {
       const out = [];
       for (const x of events) {
@@ -75,7 +106,11 @@ window.__ModuleLoader__.load({
           } else if (kind === 'plugin') {
             //  plugin kind 中非注入的说明（人格一致性拦截说明等）渲染为系统提示，
             // 避免被误认为"你"的用户气泡；runtime-context 注入（"Current runtime context" 开头）跳过。
-            if (txt && !txt.startsWith('Current runtime context')) out.push({ role: 'system', text: txt, time: ev.time ?? 0, key: `e${ev.seq}` });
+            //：目标类注入（<goal_blocked> 等）本身是**面向模型的指令**，先改写成简洁中文
+            // 提示再上屏（见 goalNoticeOf），否则英文收尾指令会原样显示给用户。
+            if (txt && !txt.startsWith('Current runtime context')) {
+              out.push({ role: 'system', text: goalNoticeOf(txt) ?? txt, time: ev.time ?? 0, key: `e${ev.seq}` });
+            }
           }
           // 其余 kind（skill-catalog 等系统注入）一律不渲染
         } else if (ev?.type === 'command/run') {
